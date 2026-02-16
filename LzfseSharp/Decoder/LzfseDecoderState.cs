@@ -1,56 +1,4 @@
-using LzfseSharp.Fse;
-
 namespace LzfseSharp.Decoder;
-
-/// <summary>
-/// Compressed LZFSE block decoder state
-/// </summary>
-internal struct LzfseCompressedBlockDecoderState
-{
-    public uint NMatches;
-    public uint NLmdPayloadBytes;
-    public int CurrentLiteralPos;
-    public int LValue, MValue, DValue;
-    public FseInStream LmdInStream;
-    public int LmdInBuf;
-    public ushort LState, MState, DState;
-
-    // FSE decoder tables
-    public FseValueDecoderEntry[] LDecoder;
-    public FseValueDecoderEntry[] MDecoder;
-    public FseValueDecoderEntry[] DDecoder;
-    public int[] LiteralDecoder;
-
-    // Literals buffer
-    public byte[] Literals;
-
-    public LzfseCompressedBlockDecoderState()
-    {
-        LDecoder = new FseValueDecoderEntry[Constants.EncodeLStates];
-        MDecoder = new FseValueDecoderEntry[Constants.EncodeMStates];
-        DDecoder = new FseValueDecoderEntry[Constants.EncodeDStates];
-        LiteralDecoder = new int[Constants.EncodeLiteralStates];
-        Literals = new byte[Constants.LiteralsPerBlock + 64];
-    }
-}
-
-/// <summary>
-/// Uncompressed block decoder state
-/// </summary>
-internal struct UncompressedBlockDecoderState
-{
-    public uint NRawBytes;
-}
-
-/// <summary>
-/// LZVN compressed block decoder state
-/// </summary>
-internal struct LzvnCompressedBlockDecoderState
-{
-    public uint NRawBytes;
-    public uint NPayloadBytes;
-    public uint DPrev;
-}
 
 /// <summary>
 /// Main LZFSE decoder state
@@ -58,14 +6,14 @@ internal struct LzvnCompressedBlockDecoderState
 internal ref struct LzfseDecoderState
 {
     // Source buffer pointers
-    public int Src;
-    public int SrcBegin;
-    public int SrcEnd;
+    public int SourcePosition;
+    public int SourceStart;
+    public int SourceEnd;
 
     // Destination buffer pointers
-    public int Dst;
-    public int DstBegin;
-    public int DstEnd;
+    public int DestinationPosition;
+    public int DestinationStart;
+    public int DestinationEnd;
 
     // Stream state
     public bool EndOfStream;
@@ -77,7 +25,6 @@ internal ref struct LzfseDecoderState
     public UncompressedBlockDecoderState UncompressedBlockState;
 
     // Buffers
-    public ReadOnlySpan<byte> SrcBuffer;
-    public Span<byte> DstBuffer;
-
+    public ReadOnlySpan<byte> SourceBuffer;
+    public Span<byte> DestinationBuffer;
 }

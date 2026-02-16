@@ -18,9 +18,9 @@
     <None Include="..\LICENSE" Pack="true" PackagePath="\" />
   </ItemGroup>
 
-    <ItemGroup>
-        <InternalsVisibleTo Include="AstcSharp.Tests" />
-        <InternalsVisibleTo Include="AstcSharp.Benchmarks" />
-    </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AstcSharp.Tests" />
+    <InternalsVisibleTo Include="AstcSharp.Benchmarks" />
+  </ItemGroup>
 
 </Project>
