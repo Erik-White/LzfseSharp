@@ -1,27 +1,4 @@
-using System.Runtime.InteropServices;
-
 namespace LzfseSharp.Decoder;
-
-/// <summary>
-/// Uncompressed block header
-/// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal struct UncompressedBlockHeader
-{
-    public uint Magic;
-    public uint NRawBytes;
-}
-
-/// <summary>
-/// LZVN compressed block header
-/// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal struct LzvnCompressedBlockHeader
-{
-    public uint Magic;
-    public uint NRawBytes;
-    public uint NPayloadBytes;
-}
 
 /// <summary>
 /// Compressed block header with uncompressed frequency tables (V1)
@@ -57,23 +34,5 @@ internal struct LzfseCompressedBlockHeaderV1
         MFreq = new ushort[Constants.EncodeMSymbols];
         DFreq = new ushort[Constants.EncodeDSymbols];
         LiteralFreq = new ushort[Constants.EncodeLiteralSymbols];
-    }
-}
-
-/// <summary>
-/// Compressed block header with compressed frequency tables (V2)
-/// </summary>
-internal struct LzfseCompressedBlockHeaderV2
-{
-    public uint Magic;
-    public uint NRawBytes;
-    public ulong[] PackedFields; // [3]
-    public byte[] Freq;  // Variable size
-
-    public LzfseCompressedBlockHeaderV2()
-    {
-        PackedFields = new ulong[3];
-        Freq = new byte[2 * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
-                             Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols)];
     }
 }

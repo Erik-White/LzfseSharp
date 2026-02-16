@@ -19,23 +19,34 @@ internal static class BlockHeaderDecoder
         0, 2, 1, 6, 0, 3, 1, -1, 0, 2, 1, 7, 0, 3, 1, -1
     ];
 
+    private readonly record struct FreqDecodeResult(int Value, int BitsUsed);
+
+    internal readonly record struct V2ToV1DecodeResult(
+        LzfseCompressedBlockHeaderV1 Header,
+        int HeaderSize,
+        int Status);
+
     /// <summary>
     /// Decode a frequency value from bits
     /// </summary>
-    private static int DecodeFreqValue(uint bits, out int nbits)
+    private static FreqDecodeResult DecodeFreqValue(uint bits)
     {
-        uint b = bits & 31; // lower 5 bits
-        int n = FreqNbitsTable[b];
-        nbits = n;
+        const uint Lower5BitMask = 31;
+        const int ExtendedBits8 = 8;
+        const int ExtendedBits14 = 14;
+
+        uint tableIndex = bits & Lower5BitMask;
+        int numBits = FreqNbitsTable[tableIndex];
 
         // Special cases for > 5 bits encoding
-        if (n == 8)
-            return 8 + (int)((bits >> 4) & 0xf);
-        if (n == 14)
-            return 24 + (int)((bits >> 4) & 0x3ff);
+        if (numBits == ExtendedBits8)
+            return new FreqDecodeResult(8 + (int)((bits >> 4) & 0xf), numBits);
+
+        if (numBits == ExtendedBits14)
+            return new FreqDecodeResult(24 + (int)((bits >> 4) & 0x3ff), numBits);
 
         // <= 5 bits encoding from table
-        return FreqValueTable[b];
+        return new FreqDecodeResult(FreqValueTable[tableIndex], numBits);
     }
 
     /// <summary>
@@ -53,102 +64,107 @@ internal static class BlockHeaderDecoder
     /// <summary>
     /// Decode V2 header to V1 format
     /// </summary>
-    /// <param name="outHeader">Decoded V1 header</param>
-    /// <param name="headerSize">Actual header size consumed in bytes</param>
     /// <param name="inBytes">Input buffer containing V2 header</param>
-    /// <returns>0 on success, -1 on failure</returns>
-    public static int DecodeV2ToV1(out LzfseCompressedBlockHeaderV1 outHeader, out int headerSize, ReadOnlySpan<byte> inBytes)
+    /// <returns>Result containing decoded header, header size, and status (0 on success, -1 on failure)</returns>
+    public static V2ToV1DecodeResult DecodeV2ToV1(ReadOnlySpan<byte> inBytes)
     {
-        outHeader = new LzfseCompressedBlockHeaderV1();
-        headerSize = 0;
+        LzfseCompressedBlockHeaderV1 outHeader = new LzfseCompressedBlockHeaderV1();
+        int headerSize = 0;
 
         // Read packed fields
         // Struct: magic(4) + n_raw_bytes(4) + packed_fields[3](24) + freq[]
-        ulong v0 = MemoryOperations.Load8(inBytes[8..]);
-        ulong v1 = MemoryOperations.Load8(inBytes[16..]);
-        ulong v2 = MemoryOperations.Load8(inBytes[24..]);
+        const int PackedField0Offset = 8;
+        const int PackedField1Offset = 16;
+        const int PackedField2Offset = 24;
+
+        ulong packedField0 = MemoryOperations.Load8(inBytes[PackedField0Offset..]);
+        ulong packedField1 = MemoryOperations.Load8(inBytes[PackedField1Offset..]);
+        ulong packedField2 = MemoryOperations.Load8(inBytes[PackedField2Offset..]);
 
         outHeader.Magic = Constants.CompressedV1BlockMagic;
         outHeader.NRawBytes = MemoryOperations.Load4(inBytes[4..]);
 
         // Decode literal state
-        outHeader.NLiterals = BitOperations.GetField(v0, 0, 20);
-        outHeader.NLiteralPayloadBytes = BitOperations.GetField(v0, 20, 20);
-        outHeader.LiteralBits = (int)BitOperations.GetField(v0, 60, 3) - 7;
-        outHeader.LiteralState[0] = (ushort)BitOperations.GetField(v1, 0, 10);
-        outHeader.LiteralState[1] = (ushort)BitOperations.GetField(v1, 10, 10);
-        outHeader.LiteralState[2] = (ushort)BitOperations.GetField(v1, 20, 10);
-        outHeader.LiteralState[3] = (ushort)BitOperations.GetField(v1, 30, 10);
+        outHeader.NLiterals = BitOperations.GetField(packedField0, 0, 20);
+        outHeader.NLiteralPayloadBytes = BitOperations.GetField(packedField0, 20, 20);
+        outHeader.LiteralBits = (int)BitOperations.GetField(packedField0, 60, 3) - 7;
+        outHeader.LiteralState[0] = (ushort)BitOperations.GetField(packedField1, 0, 10);
+        outHeader.LiteralState[1] = (ushort)BitOperations.GetField(packedField1, 10, 10);
+        outHeader.LiteralState[2] = (ushort)BitOperations.GetField(packedField1, 20, 10);
+        outHeader.LiteralState[3] = (ushort)BitOperations.GetField(packedField1, 30, 10);
 
         // Decode L,M,D state
-        outHeader.NMatches = BitOperations.GetField(v0, 40, 20);
-        outHeader.NLmdPayloadBytes = BitOperations.GetField(v1, 40, 20);
-        outHeader.LmdBits = (int)BitOperations.GetField(v1, 60, 3) - 7;
-        outHeader.LState = (ushort)BitOperations.GetField(v2, 32, 10);
-        outHeader.MState = (ushort)BitOperations.GetField(v2, 42, 10);
-        outHeader.DState = (ushort)BitOperations.GetField(v2, 52, 10);
+        outHeader.NMatches = BitOperations.GetField(packedField0, 40, 20);
+        outHeader.NLmdPayloadBytes = BitOperations.GetField(packedField1, 40, 20);
+        outHeader.LmdBits = (int)BitOperations.GetField(packedField1, 60, 3) - 7;
+        outHeader.LState = (ushort)BitOperations.GetField(packedField2, 32, 10);
+        outHeader.MState = (ushort)BitOperations.GetField(packedField2, 42, 10);
+        outHeader.DState = (ushort)BitOperations.GetField(packedField2, 52, 10);
 
         // Total payload size
         outHeader.NPayloadBytes = outHeader.NLiteralPayloadBytes + outHeader.NLmdPayloadBytes;
 
         // Decode frequency tables
-        int srcPos = 32; // Start after packed fields (magic + n_raw_bytes + packed_fields[3])
-        uint declaredHeaderSize = BitOperations.GetField(v2, 0, 32);
-        int srcEnd = (int)declaredHeaderSize;
+        const int FreqTablesOffset = 32; // Start after packed fields (magic + n_raw_bytes + packed_fields[3])
+        const int BitsPerByte = 8;
+        const int MaxAccumulatorBits = 32;
 
-        Span<ushort> dstFreq = stackalloc ushort[Constants.EncodeLSymbols + Constants.EncodeMSymbols +
-                                                  Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols];
-        uint accum = 0;
-        int accumNbits = 0;
+        int sourcePosition = FreqTablesOffset;
+        uint declaredHeaderSize = BitOperations.GetField(packedField2, 0, 32);
+        int sourceEnd = (int)declaredHeaderSize;
 
-        // No freq tables?
-        if (srcEnd == srcPos)
+        int totalSymbols = Constants.EncodeLSymbols + Constants.EncodeMSymbols +
+                           Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols;
+
+        Span<ushort> allFrequencies = stackalloc ushort[totalSymbols];
+        uint bitAccumulator = 0;
+        int accumulatedBits = 0;
+
+        // No frequency tables?
+        if (sourceEnd == sourcePosition)
         {
             outHeader.LFreq.AsSpan().Clear();
             outHeader.MFreq.AsSpan().Clear();
             outHeader.DFreq.AsSpan().Clear();
             outHeader.LiteralFreq.AsSpan().Clear();
-            headerSize = srcPos;
-            return 0; // OK
+            headerSize = sourcePosition;
+            return new V2ToV1DecodeResult(outHeader, headerSize, 0);
         }
-
-        int totalSymbols = Constants.EncodeLSymbols + Constants.EncodeMSymbols +
-                           Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols;
 
         for (int i = 0; i < totalSymbols; i++)
         {
             // Refill accumulator
-            while (srcPos < srcEnd && accumNbits + 8 <= 32)
+            while (sourcePosition < sourceEnd && accumulatedBits + BitsPerByte <= MaxAccumulatorBits)
             {
-                accum |= (uint)inBytes[srcPos] << accumNbits;
-                accumNbits += 8;
-                srcPos++;
+                bitAccumulator |= (uint)inBytes[sourcePosition] << accumulatedBits;
+                accumulatedBits += BitsPerByte;
+                sourcePosition++;
             }
 
             // Decode value
-            int value = DecodeFreqValue(accum, out int nbits);
+            FreqDecodeResult decodeResult = DecodeFreqValue(bitAccumulator);
 
-            if (nbits > accumNbits)
-                return -1; // failed
+            if (decodeResult.BitsUsed > accumulatedBits)
+                return new V2ToV1DecodeResult(outHeader, headerSize, -1); // Failed - not enough bits
 
-            dstFreq[i] = (ushort)value;
+            allFrequencies[i] = (ushort)decodeResult.Value;
 
             // Consume bits
-            accum >>= nbits;
-            accumNbits -= nbits;
+            bitAccumulator >>= decodeResult.BitsUsed;
+            accumulatedBits -= decodeResult.BitsUsed;
         }
 
-        if (accumNbits >= 8 || srcPos != srcEnd)
-            return -1; // should end exactly at header end
+        if (accumulatedBits >= BitsPerByte || sourcePosition != sourceEnd)
+            return new V2ToV1DecodeResult(outHeader, headerSize, -1); // Should end exactly at header end
 
         // Copy to output arrays
-        dstFreq[..Constants.EncodeLSymbols].CopyTo(outHeader.LFreq);
-        dstFreq.Slice(Constants.EncodeLSymbols, Constants.EncodeMSymbols).CopyTo(outHeader.MFreq);
-        dstFreq.Slice(Constants.EncodeLSymbols + Constants.EncodeMSymbols, Constants.EncodeDSymbols).CopyTo(outHeader.DFreq);
-        dstFreq.Slice(Constants.EncodeLSymbols + Constants.EncodeMSymbols + Constants.EncodeDSymbols, Constants.EncodeLiteralSymbols).CopyTo(outHeader.LiteralFreq);
+        allFrequencies[..Constants.EncodeLSymbols].CopyTo(outHeader.LFreq);
+        allFrequencies.Slice(Constants.EncodeLSymbols, Constants.EncodeMSymbols).CopyTo(outHeader.MFreq);
+        allFrequencies.Slice(Constants.EncodeLSymbols + Constants.EncodeMSymbols, Constants.EncodeDSymbols).CopyTo(outHeader.DFreq);
+        allFrequencies.Slice(Constants.EncodeLSymbols + Constants.EncodeMSymbols + Constants.EncodeDSymbols, Constants.EncodeLiteralSymbols).CopyTo(outHeader.LiteralFreq);
 
-        headerSize = srcPos;
-        return 0; // OK
+        headerSize = sourcePosition;
+        return new V2ToV1DecodeResult(outHeader, headerSize, 0);
     }
 
     /// <summary>
@@ -156,29 +172,51 @@ internal static class BlockHeaderDecoder
     /// </summary>
     public static int CheckBlockHeaderV1(ref LzfseCompressedBlockHeaderV1 header)
     {
-        int testsResults = 0;
+        const int ErrorFlag = unchecked((int)0x80000000);
+        int validationErrors = 0;
 
-        testsResults |= header.Magic == Constants.CompressedV1BlockMagic ? 0 : (1 << 0);
-        testsResults |= header.NLiterals <= Constants.LiteralsPerBlock ? 0 : (1 << 1);
-        testsResults |= header.NMatches <= Constants.MatchesPerBlock ? 0 : (1 << 2);
-        testsResults |= header.LiteralState[0] < Constants.EncodeLiteralStates ? 0 : (1 << 3);
-        testsResults |= header.LiteralState[1] < Constants.EncodeLiteralStates ? 0 : (1 << 4);
-        testsResults |= header.LiteralState[2] < Constants.EncodeLiteralStates ? 0 : (1 << 5);
-        testsResults |= header.LiteralState[3] < Constants.EncodeLiteralStates ? 0 : (1 << 6);
-        testsResults |= header.LState < Constants.EncodeLStates ? 0 : (1 << 7);
-        testsResults |= header.MState < Constants.EncodeMStates ? 0 : (1 << 8);
-        testsResults |= header.DState < Constants.EncodeDStates ? 0 : (1 << 9);
+        if (header.Magic != Constants.CompressedV1BlockMagic)
+            validationErrors |= 1 << 0;
 
-        int res;
-        res = Fse.FseDecoder.CheckFreq(header.LFreq, Constants.EncodeLSymbols, Constants.EncodeLStates);
-        testsResults |= res == 0 ? 0 : (1 << 10);
-        res = Fse.FseDecoder.CheckFreq(header.MFreq, Constants.EncodeMSymbols, Constants.EncodeMStates);
-        testsResults |= res == 0 ? 0 : (1 << 11);
-        res = Fse.FseDecoder.CheckFreq(header.DFreq, Constants.EncodeDSymbols, Constants.EncodeDStates);
-        testsResults |= res == 0 ? 0 : (1 << 12);
-        res = Fse.FseDecoder.CheckFreq(header.LiteralFreq, Constants.EncodeLiteralSymbols, Constants.EncodeLiteralStates);
-        testsResults |= res == 0 ? 0 : (1 << 13);
+        if (header.NLiterals > Constants.LiteralsPerBlock)
+            validationErrors |= 1 << 1;
 
-        return testsResults != 0 ? (testsResults | unchecked((int)0x80000000)) : 0;
+        if (header.NMatches > Constants.MatchesPerBlock)
+            validationErrors |= 1 << 2;
+
+        if (header.LiteralState[0] >= Constants.EncodeLiteralStates)
+            validationErrors |= 1 << 3;
+
+        if (header.LiteralState[1] >= Constants.EncodeLiteralStates)
+            validationErrors |= 1 << 4;
+
+        if (header.LiteralState[2] >= Constants.EncodeLiteralStates)
+            validationErrors |= 1 << 5;
+
+        if (header.LiteralState[3] >= Constants.EncodeLiteralStates)
+            validationErrors |= 1 << 6;
+
+        if (header.LState >= Constants.EncodeLStates)
+            validationErrors |= 1 << 7;
+
+        if (header.MState >= Constants.EncodeMStates)
+            validationErrors |= 1 << 8;
+
+        if (header.DState >= Constants.EncodeDStates)
+            validationErrors |= 1 << 9;
+
+        if (Fse.FseDecoder.CheckFreq(header.LFreq, Constants.EncodeLSymbols, Constants.EncodeLStates) != 0)
+            validationErrors |= 1 << 10;
+
+        if (Fse.FseDecoder.CheckFreq(header.MFreq, Constants.EncodeMSymbols, Constants.EncodeMStates) != 0)
+            validationErrors |= 1 << 11;
+
+        if (Fse.FseDecoder.CheckFreq(header.DFreq, Constants.EncodeDSymbols, Constants.EncodeDStates) != 0)
+            validationErrors |= 1 << 12;
+
+        if (Fse.FseDecoder.CheckFreq(header.LiteralFreq, Constants.EncodeLiteralSymbols, Constants.EncodeLiteralStates) != 0)
+            validationErrors |= 1 << 13;
+
+        return validationErrors != 0 ? (validationErrors | ErrorFlag) : 0;
     }
 }

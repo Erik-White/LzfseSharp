@@ -27,14 +27,14 @@ public static class LzfseDecoder
             return 0;
 
         LzfseDecoderState state = default;
-        state.SrcBuffer = srcBuffer;
-        state.DstBuffer = dstBuffer;
-        state.Src = 0;
-        state.SrcBegin = 0;
-        state.SrcEnd = srcBuffer.Length;
-        state.Dst = 0;
-        state.DstBegin = 0;
-        state.DstEnd = dstBuffer.Length;
+        state.SourceBuffer = srcBuffer;
+        state.DestinationBuffer = dstBuffer;
+        state.SourcePosition = 0;
+        state.SourceStart = 0;
+        state.SourceEnd = srcBuffer.Length;
+        state.DestinationPosition = 0;
+        state.DestinationStart = 0;
+        state.DestinationEnd = dstBuffer.Length;
         state.EndOfStream = false;
         state.BlockMagic = Constants.NoBlockMagic;
         state.CompressedLzfseBlockState = new LzfseCompressedBlockDecoderState();
@@ -43,7 +43,7 @@ public static class LzfseDecoder
 
         // Return bytes written on success or when destination is full, 0 on error
         return (result == Constants.StatusOk || result == Constants.StatusDstFull)
-            ? state.Dst - state.DstBegin
+            ? state.DestinationPosition - state.DestinationStart
             : 0;
     }
 
@@ -60,15 +60,15 @@ public static class LzfseDecoder
                 case Constants.NoBlockMagic:
                 {
                     // We need at least 4 bytes of magic number to identify next block
-                    if (s.Src + 4 > s.SrcEnd)
+                    if (s.SourcePosition + 4 > s.SourceEnd)
                         return Constants.StatusSrcEmpty; // Source truncated
 
-                    uint magic = MemoryOperations.Load4(s.SrcBuffer[s.Src..]);
+                    uint magic = MemoryOperations.Load4(s.SourceBuffer[s.SourcePosition..]);
 
                     // End of stream block
                     if (magic == Constants.EndOfStreamBlockMagic)
                     {
-                        s.Src += 4;
+                        s.SourcePosition += 4;
                         s.EndOfStream = true;
                         return Constants.StatusOk; // Done
                     }
@@ -76,13 +76,13 @@ public static class LzfseDecoder
                     // Uncompressed block
                     if (magic == Constants.UncompressedBlockMagic)
                     {
-                        if (s.Src + 8 > s.SrcEnd)
+                        if (s.SourcePosition + 8 > s.SourceEnd)
                             return Constants.StatusSrcEmpty; // Source truncated
 
                         // Setup state for uncompressed block
                         ref UncompressedBlockDecoderState bs = ref s.UncompressedBlockState;
-                        bs.NRawBytes = MemoryOperations.Load4(s.SrcBuffer[(s.Src + 4)..]);
-                        s.Src += 8; // sizeof(UncompressedBlockHeader)
+                        bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                        s.SourcePosition += 8; // sizeof(UncompressedBlockHeader)
                         s.BlockMagic = magic;
                         break;
                     }
@@ -90,15 +90,15 @@ public static class LzfseDecoder
                     // LZVN compressed block
                     if (magic == Constants.CompressedLzvnBlockMagic)
                     {
-                        if (s.Src + 12 > s.SrcEnd)
+                        if (s.SourcePosition + 12 > s.SourceEnd)
                             return Constants.StatusSrcEmpty; // Source truncated
 
                         // Setup state for compressed LZVN block
                         ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
-                        bs.NRawBytes = MemoryOperations.Load4(s.SrcBuffer[(s.Src + 4)..]);
-                        bs.NPayloadBytes = MemoryOperations.Load4(s.SrcBuffer[(s.Src + 8)..]);
+                        bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                        bs.NPayloadBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 8)..]);
                         bs.DPrev = 0;
-                        s.Src += 12; // sizeof(LzvnCompressedBlockHeader)
+                        s.SourcePosition += 12; // sizeof(LzvnCompressedBlockHeader)
                         s.BlockMagic = magic;
                         break;
                     }
@@ -113,15 +113,16 @@ public static class LzfseDecoder
                         if (magic == Constants.CompressedV2BlockMagic)
                         {
                             // Check we have the fixed part of the structure (magic + n_raw_bytes + 3x8 packed_fields)
-                            if (s.Src + 28 > s.SrcEnd)
+                            if (s.SourcePosition + 28 > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
                             // Decode V2 header - this determines actual header size during parsing
-                            int decodeStatus = BlockHeaderDecoder.DecodeV2ToV1(out header1, out int actualHeaderSize, s.SrcBuffer[s.Src..]);
-                            if (decodeStatus != 0)
+                            var decodeResult = BlockHeaderDecoder.DecodeV2ToV1(s.SourceBuffer[s.SourcePosition..]);
+                            if (decodeResult.Status != 0)
                                 return Constants.StatusError; // Failed
 
-                            headerSize = (uint)actualHeaderSize;
+                            header1 = decodeResult.Header;
+                            headerSize = (uint)decodeResult.HeaderSize;
                         }
                         else
                         {
@@ -130,16 +131,16 @@ public static class LzfseDecoder
                                                      2 * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
                                                          Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
 
-                            if (s.Src + v1HeaderSize > s.SrcEnd)
+                            if (s.SourcePosition + v1HeaderSize > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
-                            header1 = DecodeV1Header(s.SrcBuffer[s.Src..]);
+                            header1 = DecodeV1Header(s.SourceBuffer[s.SourcePosition..]);
                             headerSize = v1HeaderSize;
                         }
 
                         // We require the header + entire encoded block to be present in source
                         // during the entire block decoding
-                        if (s.Src + headerSize + header1.NLiteralPayloadBytes + header1.NLmdPayloadBytes > s.SrcEnd)
+                        if (s.SourcePosition + headerSize + header1.NLiteralPayloadBytes + header1.NLmdPayloadBytes > s.SourceEnd)
                             return Constants.StatusSrcEmpty; // Need all encoded block
 
                         // Sanity checks
@@ -147,7 +148,7 @@ public static class LzfseDecoder
                             return Constants.StatusError;
 
                         // Skip header
-                        s.Src += (int)headerSize;
+                        s.SourcePosition += (int)headerSize;
 
                         // Setup state for compressed V1 block from header
                         ref LzfseCompressedBlockDecoderState bs = ref s.CompressedLzfseBlockState;
@@ -188,12 +189,14 @@ public static class LzfseDecoder
                         // Decode literals
                         {
                             FseInStream inStream = default;
-                            int bufStart = s.SrcBegin;
-                            int literalPayloadEnd = s.Src + (int)header1.NLiteralPayloadBytes;
+                            int bufStart = s.SourceStart;
+                            int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
                             int buf = literalPayloadEnd; // Read bits backwards from the end
 
-                            if (inStream.Init(header1.LiteralBits, ref buf, bufStart, s.SrcBuffer) != 0)
+                            var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, s.SourceBuffer);
+                            if (initResult.Status != 0)
                                 return Constants.StatusError;
+                            buf = initResult.BufferPtr;
 
                             ushort state0 = header1.LiteralState[0];
                             ushort state1 = header1.LiteralState[1];
@@ -203,8 +206,10 @@ public static class LzfseDecoder
                             // Decode literals 4 at a time (n_literals is multiple of 4)
                             for (uint i = 0; i < header1.NLiterals; i += 4)
                             {
-                                if (inStream.Flush(ref buf, bufStart, s.SrcBuffer) != 0)
+                                var flushResult = inStream.Flush(buf, bufStart, s.SourceBuffer);
+                                if (flushResult.Status != 0)
                                     return Constants.StatusError;
+                                buf = flushResult.BufferPtr;
 
                                 bs.Literals[i + 0] = FseDecoder.Decode(ref state0, bs.LiteralDecoder, ref inStream);
                                 bs.Literals[i + 1] = FseDecoder.Decode(ref state1, bs.LiteralDecoder, ref inStream);
@@ -216,21 +221,23 @@ public static class LzfseDecoder
                         }
 
                         // Skip literal payload
-                        s.Src += (int)header1.NLiteralPayloadBytes;
+                        s.SourcePosition += (int)header1.NLiteralPayloadBytes;
 
                         // Initialize the L,M,D decode stream, do not start decoding matches yet
                         {
                             FseInStream inStream = default;
                             // Read bits backwards from the end
-                            int buf = s.Src + (int)header1.NLmdPayloadBytes;
+                            int buf = s.SourcePosition + (int)header1.NLmdPayloadBytes;
 
-                            if (inStream.Init(header1.LmdBits, ref buf, s.Src, s.SrcBuffer) != 0)
+                            var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, s.SourceBuffer);
+                            if (initResult.Status != 0)
                                 return Constants.StatusError;
+                            buf = initResult.BufferPtr;
 
                             bs.LState = header1.LState;
                             bs.MState = header1.MState;
                             bs.DState = header1.DState;
-                            bs.LmdInBuf = buf - s.Src;
+                            bs.LmdInBuf = buf - s.SourcePosition;
                             bs.LValue = bs.MValue = 0;
                             // Initialize D to an illegal value so we can't erroneously use
                             // an uninitialized "previous" value
@@ -259,24 +266,24 @@ public static class LzfseDecoder
                         break; // End of block
                     }
 
-                    if (s.SrcEnd <= s.Src)
+                    if (s.SourceEnd <= s.SourcePosition)
                         return Constants.StatusSrcEmpty; // Need more source data
 
-                    int srcSpace = s.SrcEnd - s.Src;
+                    int srcSpace = s.SourceEnd - s.SourcePosition;
                     if (copySize > srcSpace)
                         copySize = (uint)srcSpace; // Limit to source data (> 0)
 
-                    if (s.DstEnd <= s.Dst)
+                    if (s.DestinationEnd <= s.DestinationPosition)
                         return Constants.StatusDstFull; // Need more destination capacity
 
-                    int dstSpace = s.DstEnd - s.Dst;
+                    int dstSpace = s.DestinationEnd - s.DestinationPosition;
                     if (copySize > dstSpace)
                         copySize = (uint)dstSpace; // Limit to destination capacity (> 0)
 
                     // Copy the data (we always have copySize > 0 here)
-                    s.SrcBuffer.Slice(s.Src, (int)copySize).CopyTo(s.DstBuffer[s.Dst..]);
-                    s.Src += (int)copySize;
-                    s.Dst += (int)copySize;
+                    s.SourceBuffer.Slice(s.SourcePosition, (int)copySize).CopyTo(s.DestinationBuffer[s.DestinationPosition..]);
+                    s.SourcePosition += (int)copySize;
+                    s.DestinationPosition += (int)copySize;
                     bs.NRawBytes -= copySize;
 
                     break;
@@ -288,7 +295,7 @@ public static class LzfseDecoder
                     ref LzfseCompressedBlockDecoderState bs = ref s.CompressedLzfseBlockState;
 
                     // Require the entire LMD payload to be in source
-                    if (s.SrcEnd <= s.Src || bs.NLmdPayloadBytes > (uint)(s.SrcEnd - s.Src))
+                    if (s.SourceEnd <= s.SourcePosition || bs.NLmdPayloadBytes > (uint)(s.SourceEnd - s.SourcePosition))
                         return Constants.StatusSrcEmpty;
 
                     int status = LzfseBlockDecoder.DecodeLmd(ref s);
@@ -296,7 +303,7 @@ public static class LzfseDecoder
                         return status;
 
                     s.BlockMagic = Constants.NoBlockMagic;
-                    s.Src += (int)bs.NLmdPayloadBytes; // To next block
+                    s.SourcePosition += (int)bs.NLmdPayloadBytes; // To next block
                     break;
                 }
 
@@ -304,44 +311,44 @@ public static class LzfseDecoder
                 {
                     ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
 
-                    if (bs.NPayloadBytes > 0 && s.SrcEnd <= s.Src)
+                    if (bs.NPayloadBytes > 0 && s.SourceEnd <= s.SourcePosition)
                         return Constants.StatusSrcEmpty; // Need more source data
 
                     // Initialize LZVN decoder state
                     LzvnDecoderState dstate = new LzvnDecoderState
                     {
-                        SrcPos = s.Src,
-                        SrcEnd = s.SrcEnd,
-                        DstPos = s.Dst,
-                        DstBegin = s.DstBegin,
-                        DstEnd = s.DstEnd,
-                        DPrev = (int)bs.DPrev,
+                        SourcePosition = s.SourcePosition,
+                        SourceEnd = s.SourceEnd,
+                        DestinationPosition = s.DestinationPosition,
+                        DestinationStart = s.DestinationStart,
+                        DestinationEnd = s.DestinationEnd,
+                        PreviousDistance = (int)bs.DPrev,
                         EndOfStream = false
                     };
 
                     // Limit to payload bytes
-                    if (dstate.SrcEnd - s.Src > bs.NPayloadBytes)
-                        dstate.SrcEnd = s.Src + (int)bs.NPayloadBytes;
+                    if (dstate.SourceEnd - s.SourcePosition > bs.NPayloadBytes)
+                        dstate.SourceEnd = s.SourcePosition + (int)bs.NPayloadBytes;
 
                     // Limit to raw bytes
-                    if (dstate.DstEnd - s.Dst > bs.NRawBytes)
-                        dstate.DstEnd = s.Dst + (int)bs.NRawBytes;
+                    if (dstate.DestinationEnd - s.DestinationPosition > bs.NRawBytes)
+                        dstate.DestinationEnd = s.DestinationPosition + (int)bs.NRawBytes;
 
                     // Run LZVN decoder
-                    LzvnDecoder.Decode(ref dstate, s.SrcBuffer, s.DstBuffer);
+                    LzvnDecoder.Decode(ref dstate, s.SourceBuffer, s.DestinationBuffer);
 
                     // Update our state
-                    int srcUsed = dstate.SrcPos - s.Src;
-                    int dstUsed = dstate.DstPos - s.Dst;
+                    int srcUsed = dstate.SourcePosition - s.SourcePosition;
+                    int dstUsed = dstate.DestinationPosition - s.DestinationPosition;
 
                     if (srcUsed > bs.NPayloadBytes || dstUsed > bs.NRawBytes)
                         return Constants.StatusError; // Sanity check
 
-                    s.Src = dstate.SrcPos;
-                    s.Dst = dstate.DstPos;
+                    s.SourcePosition = dstate.SourcePosition;
+                    s.DestinationPosition = dstate.DestinationPosition;
                     bs.NPayloadBytes -= (uint)srcUsed;
                     bs.NRawBytes -= (uint)dstUsed;
-                    bs.DPrev = (uint)dstate.DPrev;
+                    bs.DPrev = (uint)dstate.PreviousDistance;
 
                     // Test end of block - successful completion
                     if (bs.NPayloadBytes == 0 && bs.NRawBytes == 0 && dstate.EndOfStream)

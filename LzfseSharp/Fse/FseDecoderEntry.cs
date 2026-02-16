@@ -23,30 +23,3 @@ internal struct FseDecoderEntry
     /// </summary>
     public short Delta;
 }
-
-/// <summary>
-/// Entry for one state in the FSE value decoder table
-/// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal struct FseValueDecoderEntry
-{
-    /// <summary>
-    /// State bits + extra value bits = shift for next decode
-    /// </summary>
-    public byte TotalBits;
-
-    /// <summary>
-    /// Extra value bits
-    /// </summary>
-    public byte ValueBits;
-
-    /// <summary>
-    /// State base (delta)
-    /// </summary>
-    public short Delta;
-
-    /// <summary>
-    /// Value base
-    /// </summary>
-    public int VBase;
-}
