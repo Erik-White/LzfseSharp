@@ -8,8 +8,7 @@ LZFSE is a Lempel-Ziv style data compression algorithm using Finite State Entrop
 
 ## Features
 
-- ✅ Pure C# implementation - no native dependencies
-- ✅ Supports all LZFSE block types:
+- Supports all LZFSE block types:
   - LZFSE compressed blocks (V1 and V2 with FSE encoding)
   - LZVN compressed blocks (simpler algorithm for small data)
   - Uncompressed blocks
