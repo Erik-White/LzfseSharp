@@ -4,8 +4,18 @@ This project contains BenchmarkDotNet benchmarks comparing the performance of Lz
 
 ## Running the Benchmarks
 
+### Interactive Mode
+
+Run without arguments to see an interactive menu:
+
 ```bash
-dotnet run -c Release --project LzfseSharp.Benchmarks
+dotnet run -c Release --project LzfseSharp.Benchmarks --framework net10.0
+```
+
+### Run Specific Benchmark
+
+```bash
+dotnet run -c Release --project LzfseSharp.Benchmarks --framework net10.0 --filter *DecompressionBenchmarks*
 ```
 
 ## What's Being Measured
