@@ -80,28 +80,30 @@ internal static class LzvnDecoder
                 D = decodeResult.MatchDistance.Value;
             opcodeLength = decodeResult.OpcodeLength;
 
-            if (decodeResult.Status == -1)
-                break; // Source truncated
-
-            if (decodeResult.Status == -2)
+            switch (decodeResult.Status)
             {
-                // End of stream
-                state.SourcePosition = sourcePosition + opcodeLength;
-                state.EndOfStream = true;
-                state.DestinationPosition = destinationPosition;
-                state.PreviousDistance = (int)D;
-                return;
+                case -1:
+                    // Source truncated
+                    break;
+
+                case -2:
+                    // End of stream
+                    state.SourcePosition = sourcePosition + opcodeLength;
+                    state.EndOfStream = true;
+                    state.DestinationPosition = destinationPosition;
+                    state.PreviousDistance = (int)D;
+                    return;
+
+                case 0:
+                    // NOP, skip and continue
+                    sourcePosition += opcodeLength;
+                    sourceLength -= opcodeLength;
+                    continue;
             }
 
-            if (decodeResult.Status == 0)
-            {
-                // NOP, skip and continue
-                sourcePosition += opcodeLength;
-                sourceLength -= opcodeLength;
-                continue;
-            }
-
-            // opResult == 1: normal opcode
+            // Status == 1: normal opcode
+            if (decodeResult.Status != 1)
+                break; // Status was -1 (source truncated)
             if (L > 0 && M > 0)
             {
                 // Literal and match
@@ -158,15 +160,7 @@ internal static class LzvnDecoder
         partialState = default;
 
         // Advance past opcode
-        int opcodeLength = sourcePosition < src.Length
-            ? (src[sourcePosition] >= LzvnConstants.LiteralOpcodeStart && src[sourcePosition] < LzvnConstants.LiteralOpcodeEnd
-                ? (src[sourcePosition] == LzvnConstants.LargeLiteralOpcode ? 2 : 1)
-                : (src[sourcePosition] >= LzvnConstants.MediumDistanceOpcodeStart && src[sourcePosition] < LzvnConstants.MediumDistanceOpcodeEnd
-                    ? 3
-                    : ((src[sourcePosition] & 7) == LzvnConstants.PreviousDistanceFlag
-                        ? 1
-                        : ((src[sourcePosition] & 7) == LzvnConstants.LargeDistanceFlag ? 3 : 2))))
-            : 1;
+        int opcodeLength = sourcePosition < src.Length ? GetOpcodeLength(src[sourcePosition]) : 1;
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
@@ -210,11 +204,7 @@ internal static class LzvnDecoder
     {
         partialState = default;
 
-        int opcodeLength = sourcePosition < src.Length
-            ? (src[sourcePosition] >= LzvnConstants.LiteralOpcodeStart && src[sourcePosition] < LzvnConstants.LiteralOpcodeEnd
-                ? (src[sourcePosition] == LzvnConstants.LargeLiteralOpcode ? 2 : 1)
-                : 1)
-            : 1;
+        int opcodeLength = sourcePosition < src.Length ? GetOpcodeLength(src[sourcePosition]) : 1;
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
@@ -259,6 +249,31 @@ internal static class LzvnDecoder
 
         destinationLength -= (int)M;
         return true;
+    }
+
+    /// <summary>
+    /// Calculate the opcode length based on the opcode byte
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetOpcodeLength(byte opcode)
+    {
+        // Check opcode category and return appropriate length
+        if (opcode >= LzvnConstants.LiteralOpcodeStart && opcode < LzvnConstants.LiteralOpcodeEnd)
+        {
+            return opcode == LzvnConstants.LargeLiteralOpcode ? 2 : 1;
+        }
+
+        if (opcode >= LzvnConstants.MediumDistanceOpcodeStart && opcode < LzvnConstants.MediumDistanceOpcodeEnd)
+        {
+            return 3;
+        }
+
+        return (opcode & 7) switch
+        {
+            LzvnConstants.PreviousDistanceFlag => 1,
+            LzvnConstants.LargeDistanceFlag => 3,
+            _ => 2
+        };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

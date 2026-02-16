@@ -65,192 +65,196 @@ public static class LzfseDecoder
 
                     uint magic = MemoryOperations.Load4(s.SourceBuffer[s.SourcePosition..]);
 
-                    // End of stream block
-                    if (magic == Constants.EndOfStreamBlockMagic)
+                    switch (magic)
                     {
-                        s.SourcePosition += 4;
-                        s.EndOfStream = true;
-                        return Constants.StatusOk; // Done
-                    }
+                        case Constants.EndOfStreamBlockMagic:
+                            // End of stream block
+                            s.SourcePosition += 4;
+                            s.EndOfStream = true;
+                            return Constants.StatusOk; // Done
 
-                    // Uncompressed block
-                    if (magic == Constants.UncompressedBlockMagic)
-                    {
-                        if (s.SourcePosition + 8 > s.SourceEnd)
-                            return Constants.StatusSrcEmpty; // Source truncated
-
-                        // Setup state for uncompressed block
-                        ref UncompressedBlockDecoderState bs = ref s.UncompressedBlockState;
-                        bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
-                        s.SourcePosition += 8; // sizeof(UncompressedBlockHeader)
-                        s.BlockMagic = magic;
-                        break;
-                    }
-
-                    // LZVN compressed block
-                    if (magic == Constants.CompressedLzvnBlockMagic)
-                    {
-                        if (s.SourcePosition + 12 > s.SourceEnd)
-                            return Constants.StatusSrcEmpty; // Source truncated
-
-                        // Setup state for compressed LZVN block
-                        ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
-                        bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
-                        bs.NPayloadBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 8)..]);
-                        bs.DPrev = 0;
-                        s.SourcePosition += 12; // sizeof(LzvnCompressedBlockHeader)
-                        s.BlockMagic = magic;
-                        break;
-                    }
-
-                    // LZFSE compressed blocks (V1 or V2)
-                    if (magic == Constants.CompressedV1BlockMagic || magic == Constants.CompressedV2BlockMagic)
-                    {
-                        LzfseCompressedBlockHeaderV1 header1;
-                        uint headerSize;
-
-                        // Decode compressed headers
-                        if (magic == Constants.CompressedV2BlockMagic)
+                        case Constants.UncompressedBlockMagic:
                         {
-                            // Check we have the fixed part of the structure (magic + n_raw_bytes + 3x8 packed_fields)
-                            if (s.SourcePosition + 28 > s.SourceEnd)
+                            // Uncompressed block
+                            if (s.SourcePosition + 8 > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
-                            // Decode V2 header - this determines actual header size during parsing
-                            var decodeResult = BlockHeaderDecoder.DecodeV2ToV1(s.SourceBuffer[s.SourcePosition..]);
-                            if (decodeResult.Status != 0)
-                                return Constants.StatusError; // Failed
-
-                            header1 = decodeResult.Header;
-                            headerSize = (uint)decodeResult.HeaderSize;
+                            // Setup state for uncompressed block
+                            ref UncompressedBlockDecoderState bs = ref s.UncompressedBlockState;
+                            bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                            s.SourcePosition += 8; // sizeof(UncompressedBlockHeader)
+                            s.BlockMagic = magic;
+                            break;
                         }
-                        else
-                        {
-                            // V1 header - fixed size
-                            const uint v1HeaderSize = 8 + 8 + 8 + 8 + 4 * 2 + 8 +
-                                                     2 * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
-                                                         Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
 
-                            if (s.SourcePosition + v1HeaderSize > s.SourceEnd)
+                        case Constants.CompressedLzvnBlockMagic:
+                        {
+                            // LZVN compressed block
+                            if (s.SourcePosition + 12 > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
-                            header1 = DecodeV1Header(s.SourceBuffer[s.SourcePosition..]);
-                            headerSize = v1HeaderSize;
+                            // Setup state for compressed LZVN block
+                            ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
+                            bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                            bs.NPayloadBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 8)..]);
+                            bs.DPrev = 0;
+                            s.SourcePosition += 12; // sizeof(LzvnCompressedBlockHeader)
+                            s.BlockMagic = magic;
+                            break;
                         }
 
-                        // We require the header + entire encoded block to be present in source
-                        // during the entire block decoding
-                        if (s.SourcePosition + headerSize + header1.NLiteralPayloadBytes + header1.NLmdPayloadBytes > s.SourceEnd)
-                            return Constants.StatusSrcEmpty; // Need all encoded block
-
-                        // Sanity checks
-                        if (BlockHeaderDecoder.CheckBlockHeaderV1(ref header1) != 0)
-                            return Constants.StatusError;
-
-                        // Skip header
-                        s.SourcePosition += (int)headerSize;
-
-                        // Setup state for compressed V1 block from header
-                        ref LzfseCompressedBlockDecoderState bs = ref s.CompressedLzfseBlockState;
-                        bs.NLmdPayloadBytes = header1.NLmdPayloadBytes;
-                        bs.NMatches = header1.NMatches;
-
-                        // Initialize FSE decoder tables
-                        FseDecoder.InitDecoderTable(
-                            Constants.EncodeLiteralStates,
-                            Constants.EncodeLiteralSymbols,
-                            header1.LiteralFreq,
-                            bs.LiteralDecoder);
-
-                        FseDecoder.InitValueDecoderTable(
-                            Constants.EncodeLStates,
-                            Constants.EncodeLSymbols,
-                            header1.LFreq,
-                            Constants.LExtraBits,
-                            Constants.LBaseValue,
-                            bs.LDecoder);
-
-                        FseDecoder.InitValueDecoderTable(
-                            Constants.EncodeMStates,
-                            Constants.EncodeMSymbols,
-                            header1.MFreq,
-                            Constants.MExtraBits,
-                            Constants.MBaseValue,
-                            bs.MDecoder);
-
-                        FseDecoder.InitValueDecoderTable(
-                            Constants.EncodeDStates,
-                            Constants.EncodeDSymbols,
-                            header1.DFreq,
-                            Constants.DExtraBits,
-                            Constants.DBaseValue,
-                            bs.DDecoder);
-
-                        // Decode literals
+                        case Constants.CompressedV1BlockMagic:
+                        case Constants.CompressedV2BlockMagic:
                         {
-                            FseInStream inStream = default;
-                            int bufStart = s.SourceStart;
-                            int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
-                            int buf = literalPayloadEnd; // Read bits backwards from the end
+                            // LZFSE compressed blocks (V1 or V2)
+                            LzfseCompressedBlockHeaderV1 header1;
+                            uint headerSize;
 
-                            var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, s.SourceBuffer);
-                            if (initResult.Status != 0)
-                                return Constants.StatusError;
-                            buf = initResult.BufferPtr;
-
-                            ushort state0 = header1.LiteralState[0];
-                            ushort state1 = header1.LiteralState[1];
-                            ushort state2 = header1.LiteralState[2];
-                            ushort state3 = header1.LiteralState[3];
-
-                            // Decode literals 4 at a time (n_literals is multiple of 4)
-                            for (uint i = 0; i < header1.NLiterals; i += 4)
+                            // Decode compressed headers
+                            if (magic == Constants.CompressedV2BlockMagic)
                             {
-                                var flushResult = inStream.Flush(buf, bufStart, s.SourceBuffer);
-                                if (flushResult.Status != 0)
-                                    return Constants.StatusError;
-                                buf = flushResult.BufferPtr;
+                                // Check we have the fixed part of the structure (magic + n_raw_bytes + 3x8 packed_fields)
+                                if (s.SourcePosition + 28 > s.SourceEnd)
+                                    return Constants.StatusSrcEmpty; // Source truncated
 
-                                bs.Literals[i + 0] = FseDecoder.Decode(ref state0, bs.LiteralDecoder, ref inStream);
-                                bs.Literals[i + 1] = FseDecoder.Decode(ref state1, bs.LiteralDecoder, ref inStream);
-                                bs.Literals[i + 2] = FseDecoder.Decode(ref state2, bs.LiteralDecoder, ref inStream);
-                                bs.Literals[i + 3] = FseDecoder.Decode(ref state3, bs.LiteralDecoder, ref inStream);
+                                // Decode V2 header - this determines actual header size during parsing
+                                var decodeResult = BlockHeaderDecoder.DecodeV2ToV1(s.SourceBuffer[s.SourcePosition..]);
+                                if (decodeResult.Status != 0)
+                                    return Constants.StatusError; // Failed
+
+                                header1 = decodeResult.Header;
+                                headerSize = (uint)decodeResult.HeaderSize;
+                            }
+                            else
+                            {
+                                // V1 header - fixed size
+                                const uint v1HeaderSize = 8 + 8 + 8 + 8 + 4 * 2 + 8 +
+                                                         2 * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
+                                                             Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
+
+                                if (s.SourcePosition + v1HeaderSize > s.SourceEnd)
+                                    return Constants.StatusSrcEmpty; // Source truncated
+
+                                header1 = DecodeV1Header(s.SourceBuffer[s.SourcePosition..]);
+                                headerSize = v1HeaderSize;
                             }
 
-                            bs.CurrentLiteralPos = 0;
-                        }
+                            // We require the header + entire encoded block to be present in source
+                            // during the entire block decoding
+                            if (s.SourcePosition + headerSize + header1.NLiteralPayloadBytes + header1.NLmdPayloadBytes > s.SourceEnd)
+                                return Constants.StatusSrcEmpty; // Need all encoded block
 
-                        // Skip literal payload
-                        s.SourcePosition += (int)header1.NLiteralPayloadBytes;
-
-                        // Initialize the L,M,D decode stream, do not start decoding matches yet
-                        {
-                            FseInStream inStream = default;
-                            // Read bits backwards from the end
-                            int buf = s.SourcePosition + (int)header1.NLmdPayloadBytes;
-
-                            var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, s.SourceBuffer);
-                            if (initResult.Status != 0)
+                            // Sanity checks
+                            if (BlockHeaderDecoder.CheckBlockHeaderV1(ref header1) != 0)
                                 return Constants.StatusError;
-                            buf = initResult.BufferPtr;
 
-                            bs.LState = header1.LState;
-                            bs.MState = header1.MState;
-                            bs.DState = header1.DState;
-                            bs.LmdInBuf = buf - s.SourcePosition;
-                            bs.LValue = bs.MValue = 0;
-                            // Initialize D to an illegal value so we can't erroneously use
-                            // an uninitialized "previous" value
-                            bs.DValue = -1;
-                            bs.LmdInStream = inStream;
+                            // Skip header
+                            s.SourcePosition += (int)headerSize;
+
+                            // Setup state for compressed V1 block from header
+                            ref LzfseCompressedBlockDecoderState bs = ref s.CompressedLzfseBlockState;
+                            bs.NLmdPayloadBytes = header1.NLmdPayloadBytes;
+                            bs.NMatches = header1.NMatches;
+
+                            // Initialize FSE decoder tables
+                            FseDecoder.InitDecoderTable(
+                                Constants.EncodeLiteralStates,
+                                Constants.EncodeLiteralSymbols,
+                                header1.LiteralFreq,
+                                bs.LiteralDecoder);
+
+                            FseDecoder.InitValueDecoderTable(
+                                Constants.EncodeLStates,
+                                Constants.EncodeLSymbols,
+                                header1.LFreq,
+                                Constants.LExtraBits,
+                                Constants.LBaseValue,
+                                bs.LDecoder);
+
+                            FseDecoder.InitValueDecoderTable(
+                                Constants.EncodeMStates,
+                                Constants.EncodeMSymbols,
+                                header1.MFreq,
+                                Constants.MExtraBits,
+                                Constants.MBaseValue,
+                                bs.MDecoder);
+
+                            FseDecoder.InitValueDecoderTable(
+                                Constants.EncodeDStates,
+                                Constants.EncodeDSymbols,
+                                header1.DFreq,
+                                Constants.DExtraBits,
+                                Constants.DBaseValue,
+                                bs.DDecoder);
+
+                            // Decode literals
+                            {
+                                FseInStream inStream = default;
+                                int bufStart = s.SourceStart;
+                                int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
+                                int buf = literalPayloadEnd; // Read bits backwards from the end
+
+                                var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, s.SourceBuffer);
+                                if (initResult.Status != 0)
+                                    return Constants.StatusError;
+                                buf = initResult.BufferPtr;
+
+                                ushort state0 = header1.LiteralState[0];
+                                ushort state1 = header1.LiteralState[1];
+                                ushort state2 = header1.LiteralState[2];
+                                ushort state3 = header1.LiteralState[3];
+
+                                // Decode literals 4 at a time (n_literals is multiple of 4)
+                                for (uint i = 0; i < header1.NLiterals; i += 4)
+                                {
+                                    var flushResult = inStream.Flush(buf, bufStart, s.SourceBuffer);
+                                    if (flushResult.Status != 0)
+                                        return Constants.StatusError;
+                                    buf = flushResult.BufferPtr;
+
+                                    bs.Literals[i + 0] = FseDecoder.Decode(ref state0, bs.LiteralDecoder, ref inStream);
+                                    bs.Literals[i + 1] = FseDecoder.Decode(ref state1, bs.LiteralDecoder, ref inStream);
+                                    bs.Literals[i + 2] = FseDecoder.Decode(ref state2, bs.LiteralDecoder, ref inStream);
+                                    bs.Literals[i + 3] = FseDecoder.Decode(ref state3, bs.LiteralDecoder, ref inStream);
+                                }
+
+                                bs.CurrentLiteralPos = 0;
+                            }
+
+                            // Skip literal payload
+                            s.SourcePosition += (int)header1.NLiteralPayloadBytes;
+
+                            // Initialize the L,M,D decode stream, do not start decoding matches yet
+                            {
+                                FseInStream inStream = default;
+                                // Read bits backwards from the end
+                                int buf = s.SourcePosition + (int)header1.NLmdPayloadBytes;
+
+                                var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, s.SourceBuffer);
+                                if (initResult.Status != 0)
+                                    return Constants.StatusError;
+                                buf = initResult.BufferPtr;
+
+                                bs.LState = header1.LState;
+                                bs.MState = header1.MState;
+                                bs.DState = header1.DState;
+                                bs.LmdInBuf = buf - s.SourcePosition;
+                                bs.LValue = bs.MValue = 0;
+                                // Initialize D to an illegal value so we can't erroneously use
+                                // an uninitialized "previous" value
+                                bs.DValue = -1;
+                                bs.LmdInStream = inStream;
+                            }
+
+                            s.BlockMagic = magic;
+                            break;
                         }
 
-                        s.BlockMagic = magic;
-                        break;
+                        default:
+                            // Invalid magic number
+                            return Constants.StatusError;
                     }
-
-                    // Here we have an invalid magic number
-                    return Constants.StatusError;
+                    break;
                 }
 
                 case Constants.UncompressedBlockMagic:

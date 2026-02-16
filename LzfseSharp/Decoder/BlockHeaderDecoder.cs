@@ -38,15 +38,12 @@ internal static class BlockHeaderDecoder
         uint tableIndex = bits & Lower5BitMask;
         int numBits = FreqNbitsTable[tableIndex];
 
-        // Special cases for > 5 bits encoding
-        if (numBits == ExtendedBits8)
-            return new FreqDecodeResult(8 + (int)((bits >> 4) & 0xf), numBits);
-
-        if (numBits == ExtendedBits14)
-            return new FreqDecodeResult(24 + (int)((bits >> 4) & 0x3ff), numBits);
-
-        // <= 5 bits encoding from table
-        return new FreqDecodeResult(FreqValueTable[tableIndex], numBits);
+        return numBits switch
+        {
+            ExtendedBits8 => new FreqDecodeResult(8 + (int)((bits >> 4) & 0xf), numBits),
+            ExtendedBits14 => new FreqDecodeResult(24 + (int)((bits >> 4) & 0x3ff), numBits),
+            _ => new FreqDecodeResult(FreqValueTable[tableIndex], numBits) // <= 5 bits encoding from table
+        };
     }
 
     /// <summary>
