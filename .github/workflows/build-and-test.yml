@@ -33,6 +33,16 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
 
+      - name: Copy Linux ARM64 binary for macOS ARM64
+        if: runner.os == 'macOS'
+        run: |
+          LZFSE_PKG=$(find ~/.nuget/packages/lzfse-net -type d -name "1.*" | head -1)
+          if [ -d "$LZFSE_PKG/runtimes/linux-arm64/native" ]; then
+            mkdir -p "$LZFSE_PKG/runtimes/osx-arm64/native"
+            cp "$LZFSE_PKG/runtimes/linux-arm64/native/liblzfse.so" "$LZFSE_PKG/runtimes/osx-arm64/native/liblzfse.dylib"
+            echo "Copied linux-arm64 binary to osx-arm64"
+          fi
+
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
