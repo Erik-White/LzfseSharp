@@ -5,6 +5,7 @@
     <File Path=".gitignore" />
     <File Path=".gitattributes" />
     <File Path="Directory.Build.props" />
+    <File Path="LzfseSharp\LzfseSharp.snk" />
   </Folder>
   <Project Path="LzfseSharp\LzfseSharp.csproj" Type="Classic C#" />
   <Project Path="LzfseSharp.Tests\LzfseSharp.Tests.csproj" Type="Classic C#" />
