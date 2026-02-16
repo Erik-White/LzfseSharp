@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
+    <File Path="LICENSE" />
+    <File Path=".gitignore" />
+    <File Path=".gitattributes" />
+    <File Path="Directory.Build.props" />
+  </Folder>
+  <Project Path="LzfseSharp\LzfseSharp.csproj" Type="Classic C#" />
+  <Project Path="LzfseSharp.Tests\LzfseSharp.Tests.csproj" Type="Classic C#" />
+  <Project Path="LzfseSharp.Benchmarks\LzfseSharp.Benchmarks.csproj" Type="Classic C#" />
+  <Properties Name="Visual Studio">
+    <Property Name="OpenWith" Value="Visual Studio Version 17" />
+  </Properties>
+</Solution>
