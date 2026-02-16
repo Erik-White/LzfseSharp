@@ -3,6 +3,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\LzfseSharp\LzfseSharp.snk</AssemblyOriginatorKeyFile>
+    <!-- Suppress CS8002: lzfse-net is unsigned third-party dependency -->
+    <NoWarn>$(NoWarn);CS8002</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
