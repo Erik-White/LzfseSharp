@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace LzfseSharp.Fse;
@@ -54,7 +55,7 @@ internal static class FseDecoder
     /// </summary>
     public static int InitDecoderTable(int stateCount, int symbolCount, ReadOnlySpan<ushort> freq, Span<int> table)
     {
-        int stateCountLeadingZeros = Core.BitOperations.CountLeadingZeros((uint)stateCount);
+        int stateCountLeadingZeros = BitOperations.LeadingZeroCount((uint)stateCount);
         int sumOfFreq = 0;
 
         int tableIndex = 0;
@@ -68,7 +69,7 @@ internal static class FseDecoder
             if (sumOfFreq > stateCount)
                 return -1;
 
-            int k = Core.BitOperations.CountLeadingZeros((uint)frequency) - stateCountLeadingZeros;
+            int k = BitOperations.LeadingZeroCount((uint)frequency) - stateCountLeadingZeros;
             int j0 = ((2 * stateCount) >> k) - frequency;
 
             // Initialize all states reached by this symbol
@@ -106,7 +107,7 @@ internal static class FseDecoder
         ReadOnlySpan<int> symbolVBase,
         Span<FseValueDecoderEntry> table)
     {
-        int stateCountLeadingZeros = Core.BitOperations.CountLeadingZeros((uint)stateCount);
+        int stateCountLeadingZeros = BitOperations.LeadingZeroCount((uint)stateCount);
 
         int tableIndex = 0;
         for (int i = 0; i < symbolCount; i++)
@@ -115,7 +116,7 @@ internal static class FseDecoder
             if (frequency == 0)
                 continue; // skip this symbol, no occurrences
 
-            int k = Core.BitOperations.CountLeadingZeros((uint)frequency) - stateCountLeadingZeros;
+            int k = BitOperations.LeadingZeroCount((uint)frequency) - stateCountLeadingZeros;
             int j0 = ((2 * stateCount) >> k) - frequency;
 
             FseValueDecoderEntry baseEntry = new FseValueDecoderEntry
