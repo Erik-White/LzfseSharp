@@ -188,63 +188,15 @@ public static class LzfseDecoder
                                 bs.DDecoder);
 
                             // Decode literals
-                            {
-                                FseInStream inStream = default;
-                                int bufStart = s.SourceStart;
-                                int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
-                                int buf = literalPayloadEnd; // Read bits backwards from the end
-
-                                var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, s.SourceBuffer);
-                                if (initResult.Status != 0)
-                                    return Constants.StatusError;
-                                buf = initResult.BufferPtr;
-
-                                ushort state0 = header1.LiteralState[0];
-                                ushort state1 = header1.LiteralState[1];
-                                ushort state2 = header1.LiteralState[2];
-                                ushort state3 = header1.LiteralState[3];
-
-                                // Decode literals 4 at a time (n_literals is multiple of 4)
-                                for (uint i = 0; i < header1.NLiterals; i += 4)
-                                {
-                                    var flushResult = inStream.Flush(buf, bufStart, s.SourceBuffer);
-                                    if (flushResult.Status != 0)
-                                        return Constants.StatusError;
-                                    buf = flushResult.BufferPtr;
-
-                                    bs.Literals[i + 0] = FseDecoder.Decode(ref state0, bs.LiteralDecoder, ref inStream);
-                                    bs.Literals[i + 1] = FseDecoder.Decode(ref state1, bs.LiteralDecoder, ref inStream);
-                                    bs.Literals[i + 2] = FseDecoder.Decode(ref state2, bs.LiteralDecoder, ref inStream);
-                                    bs.Literals[i + 3] = FseDecoder.Decode(ref state3, bs.LiteralDecoder, ref inStream);
-                                }
-
-                                bs.CurrentLiteralPos = 0;
-                            }
+                            if (DecodeLiterals(ref s, ref bs, ref header1) != 0)
+                                return Constants.StatusError;
 
                             // Skip literal payload
                             s.SourcePosition += (int)header1.NLiteralPayloadBytes;
 
                             // Initialize the L,M,D decode stream, do not start decoding matches yet
-                            {
-                                FseInStream inStream = default;
-                                // Read bits backwards from the end
-                                int buf = s.SourcePosition + (int)header1.NLmdPayloadBytes;
-
-                                var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, s.SourceBuffer);
-                                if (initResult.Status != 0)
-                                    return Constants.StatusError;
-                                buf = initResult.BufferPtr;
-
-                                bs.LState = header1.LState;
-                                bs.MState = header1.MState;
-                                bs.DState = header1.DState;
-                                bs.LmdInBuf = buf - s.SourcePosition;
-                                bs.LValue = bs.MValue = 0;
-                                // Initialize D to an illegal value so we can't erroneously use
-                                // an uninitialized "previous" value
-                                bs.DValue = -1;
-                                bs.LmdInStream = inStream;
-                            }
+                            if (InitializeLmdStream(ref s, ref bs, ref header1) != 0)
+                                return Constants.StatusError;
 
                             s.BlockMagic = magic;
                             break;
@@ -377,6 +329,76 @@ public static class LzfseDecoder
                     return Constants.StatusError; // Invalid magic
             }
         }
+    }
+
+    /// <summary>
+    /// Decode literals from the block header
+    /// </summary>
+    private static int DecodeLiterals(
+        ref LzfseDecoderState s,
+        ref LzfseCompressedBlockDecoderState bs,
+        ref LzfseCompressedBlockHeaderV1 header1)
+    {
+        FseInStream inStream = default;
+        int bufStart = s.SourceStart;
+        int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
+        int buf = literalPayloadEnd; // Read bits backwards from the end
+
+        var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, s.SourceBuffer);
+        if (initResult.Status != 0)
+            return -1;
+        buf = initResult.BufferPtr;
+
+        ushort state0 = header1.LiteralState[0];
+        ushort state1 = header1.LiteralState[1];
+        ushort state2 = header1.LiteralState[2];
+        ushort state3 = header1.LiteralState[3];
+
+        // Decode literals 4 at a time (n_literals is multiple of 4)
+        for (uint i = 0; i < header1.NLiterals; i += 4)
+        {
+            var flushResult = inStream.Flush(buf, bufStart, s.SourceBuffer);
+            if (flushResult.Status != 0)
+                return -1;
+            buf = flushResult.BufferPtr;
+
+            bs.Literals[i + 0] = FseDecoder.Decode(ref state0, bs.LiteralDecoder, ref inStream);
+            bs.Literals[i + 1] = FseDecoder.Decode(ref state1, bs.LiteralDecoder, ref inStream);
+            bs.Literals[i + 2] = FseDecoder.Decode(ref state2, bs.LiteralDecoder, ref inStream);
+            bs.Literals[i + 3] = FseDecoder.Decode(ref state3, bs.LiteralDecoder, ref inStream);
+        }
+
+        bs.CurrentLiteralPos = 0;
+        return 0;
+    }
+
+    /// <summary>
+    /// Initialize the L,M,D decode stream
+    /// </summary>
+    private static int InitializeLmdStream(
+        ref LzfseDecoderState s,
+        ref LzfseCompressedBlockDecoderState bs,
+        ref LzfseCompressedBlockHeaderV1 header1)
+    {
+        FseInStream inStream = default;
+        // Read bits backwards from the end
+        int buf = s.SourcePosition + (int)header1.NLmdPayloadBytes;
+
+        var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, s.SourceBuffer);
+        if (initResult.Status != 0)
+            return -1;
+        buf = initResult.BufferPtr;
+
+        bs.LState = header1.LState;
+        bs.MState = header1.MState;
+        bs.DState = header1.DState;
+        bs.LmdInBuf = buf - s.SourcePosition;
+        bs.LValue = bs.MValue = 0;
+        // Initialize D to an illegal value so we can't erroneously use
+        // an uninitialized "previous" value
+        bs.DValue = -1;
+        bs.LmdInStream = inStream;
+        return 0;
     }
 
     /// <summary>
