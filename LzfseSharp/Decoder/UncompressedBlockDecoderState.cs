@@ -5,5 +5,5 @@ namespace LzfseSharp.Decoder;
 /// </summary>
 internal struct UncompressedBlockDecoderState
 {
-    public uint NRawBytes;
+    public uint RawByteCount;
 }

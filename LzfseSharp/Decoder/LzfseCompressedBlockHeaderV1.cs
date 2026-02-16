@@ -15,24 +15,19 @@ internal struct LzfseCompressedBlockHeaderV1
 
     // Final encoder states
     public int LiteralBits;
-    public ushort[] LiteralState;  // [4]
+    public ushort[] LiteralState = new ushort[4];
     public int LmdBits;
     public ushort LState;
     public ushort MState;
     public ushort DState;
 
     // Frequency tables
-    public ushort[] LFreq;       // [ENCODE_L_SYMBOLS]
-    public ushort[] MFreq;       // [ENCODE_M_SYMBOLS]
-    public ushort[] DFreq;       // [ENCODE_D_SYMBOLS]
-    public ushort[] LiteralFreq; // [ENCODE_LITERAL_SYMBOLS]
+    public ushort[] LFreq = new ushort[Constants.EncodeLSymbols];
+    public ushort[] MFreq = new ushort[Constants.EncodeMSymbols];
+    public ushort[] DFreq = new ushort[Constants.EncodeDSymbols];
+    public ushort[] LiteralFreq = new ushort[Constants.EncodeLiteralSymbols];
 
     public LzfseCompressedBlockHeaderV1()
     {
-        LiteralState = new ushort[4];
-        LFreq = new ushort[Constants.EncodeLSymbols];
-        MFreq = new ushort[Constants.EncodeMSymbols];
-        DFreq = new ushort[Constants.EncodeDSymbols];
-        LiteralFreq = new ushort[Constants.EncodeLiteralSymbols];
     }
 }

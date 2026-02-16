@@ -8,7 +8,7 @@ namespace LzfseSharp.Lzvn;
 /// </summary>
 internal static class LzvnDecoder
 {
-    private readonly record struct OpcodeDecodeResult(
+    private sealed record OpcodeDecodeResult(
         int Status,
         nuint LiteralLength,
         nuint MatchLength,
@@ -28,8 +28,9 @@ internal static class LzvnDecoder
         int sourcePosition = state.SourcePosition;
         int destinationPosition = state.DestinationPosition;
         nuint D = (nuint)state.PreviousDistance;
-        nuint M, L;
-        int opcodeLength = 0;
+        nuint M;
+        nuint L;
+        int opcodeLength;
 
         // Handle partially expanded match saved in state
         if (state.LiteralLength != 0 || state.MatchLength != 0)
@@ -37,7 +38,6 @@ internal static class LzvnDecoder
             L = state.LiteralLength;
             M = state.MatchLength;
             D = state.MatchDistance;
-            opcodeLength = 0;
             state.LiteralLength = state.MatchLength = state.MatchDistance = 0;
 
             if (M == 0)
@@ -197,18 +197,23 @@ internal static class LzvnDecoder
     }
 
     private static bool ProcessLiteral(
-        Span<byte> dst, ref int destinationPosition,
-        ReadOnlySpan<byte> src, ref int sourcePosition,
-        nuint L, ref int destinationLength, ref int sourceLength,
-        nuint D, out LzvnDecoderState partialState)
+        Span<byte> destination,
+        ref int destinationPosition,
+        ReadOnlySpan<byte> source,
+        ref int sourcePosition,
+        nuint L,
+        ref int destinationLength,
+        ref int sourceLength,
+        nuint D,
+        out LzvnDecoderState partialState)
     {
         partialState = default;
 
-        int opcodeLength = sourcePosition < src.Length ? GetOpcodeLength(src[sourcePosition]) : 1;
+        int opcodeLength = sourcePosition < source.Length ? GetOpcodeLength(source[sourcePosition]) : 1;
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
-        if (!CopyLiteralBytes(dst, ref destinationPosition, src, ref sourcePosition, L, destinationLength, ref sourceLength))
+        if (!CopyLiteralBytes(destination, ref destinationPosition, source, ref sourcePosition, L, destinationLength, ref sourceLength))
         {
             partialState.SourcePosition = sourcePosition;
             partialState.DestinationPosition = destinationPosition;
@@ -223,10 +228,15 @@ internal static class LzvnDecoder
     }
 
     private static bool ProcessMatch(
-        Span<byte> dst, ref int destinationPosition,
-        nuint M, nuint D, ref int destinationLength,
-        ReadOnlySpan<byte> src, ref int sourcePosition,
-        int opcodeLength, ref int sourceLength,
+        Span<byte> destination,
+        ref int destinationPosition,
+        nuint M,
+        nuint D,
+        ref int destinationLength,
+        ReadOnlySpan<byte> source,
+        ref int sourcePosition,
+        int opcodeLength,
+        ref int sourceLength,
         out LzvnDecoderState partialState)
     {
         partialState = default;
@@ -237,7 +247,7 @@ internal static class LzvnDecoder
             sourceLength -= opcodeLength;
         }
 
-        if (!CopyMatchBytes(dst, ref destinationPosition, M, D, destinationLength))
+        if (!CopyMatchBytes(destination, ref destinationPosition, M, D, destinationLength))
         {
             partialState.SourcePosition = sourcePosition;
             partialState.DestinationPosition = destinationPosition;
@@ -374,7 +384,7 @@ internal static class LzvnDecoder
         if (opcode >= LzvnConstants.MediumDistanceOpcodeStart && opcode < LzvnConstants.MediumDistanceOpcodeEnd)
         {
             // Medium distance
-            if (sourceLength <= 3 + (int)((opcode >> 3) & 3))
+            if (sourceLength <= 3 + ((opcode >> 3) & 3))
                 return new OpcodeDecodeResult(-1, (nuint)((opcode >> 3) & 3), 0, null, 3);
 
             ushort nextTwoBytes = MemoryOperations.Load2(source[(sourcePointer + 1)..]);
@@ -389,7 +399,7 @@ internal static class LzvnDecoder
         if ((opcode & 7) == LzvnConstants.PreviousDistanceFlag)
         {
             // Previous distance
-            if (sourceLength <= 1 + (int)(opcode >> 6))
+            if (sourceLength <= 1 + (opcode >> 6))
                 return new OpcodeDecodeResult(-1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, null, 1);
 
             return new OpcodeDecodeResult(1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, null, 1);
@@ -398,7 +408,7 @@ internal static class LzvnDecoder
         if ((opcode & 7) == LzvnConstants.LargeDistanceFlag)
         {
             // Large distance
-            if (sourceLength <= 3 + (int)(opcode >> 6))
+            if (sourceLength <= 3 + (opcode >> 6))
                 return new OpcodeDecodeResult(-1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, null, 3);
 
             return new OpcodeDecodeResult(1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, MemoryOperations.Load2(source[(sourcePointer + 1)..]), 3);
@@ -420,7 +430,7 @@ internal static class LzvnDecoder
         }
 
         // Small distance
-        if (sourceLength <= 2 + (int)(opcode >> 6))
+        if (sourceLength <= 2 + (opcode >> 6))
             return new OpcodeDecodeResult(-1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, null, 2);
 
         return new OpcodeDecodeResult(1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, (nuint)(((opcode & 7) << 8) | source[sourcePointer + 1]), 2);

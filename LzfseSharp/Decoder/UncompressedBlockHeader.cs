@@ -9,5 +9,5 @@ namespace LzfseSharp.Decoder;
 internal struct UncompressedBlockHeader
 {
     public uint Magic;
-    public uint NRawBytes;
+    public uint RawByteCount;
 }

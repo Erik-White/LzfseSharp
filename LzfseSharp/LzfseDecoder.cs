@@ -81,7 +81,7 @@ public static class LzfseDecoder
 
                             // Setup state for uncompressed block
                             ref UncompressedBlockDecoderState bs = ref s.UncompressedBlockState;
-                            bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                            bs.RawByteCount = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
                             s.SourcePosition += 8; // sizeof(UncompressedBlockHeader)
                             s.BlockMagic = magic;
                             break;
@@ -95,9 +95,9 @@ public static class LzfseDecoder
 
                             // Setup state for compressed LZVN block
                             ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
-                            bs.NRawBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
-                            bs.NPayloadBytes = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 8)..]);
-                            bs.DPrev = 0;
+                            bs.RawByteCount = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                            bs.PayloadByteCount = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 8)..]);
+                            bs.PreviousDistance = 0;
                             s.SourcePosition += 12; // sizeof(LzvnCompressedBlockHeader)
                             s.BlockMagic = magic;
                             break;
@@ -263,7 +263,7 @@ public static class LzfseDecoder
 
                     // Compute the size (in bytes) of the data that we will actually copy.
                     // This size is minimum(bs.n_raw_bytes, space in src, space in dst).
-                    uint copySize = bs.NRawBytes; // Bytes left to copy
+                    uint copySize = bs.RawByteCount; // Bytes left to copy
                     if (copySize == 0)
                     {
                         s.BlockMagic = Constants.NoBlockMagic;
@@ -288,7 +288,7 @@ public static class LzfseDecoder
                     s.SourceBuffer.Slice(s.SourcePosition, (int)copySize).CopyTo(s.DestinationBuffer[s.DestinationPosition..]);
                     s.SourcePosition += (int)copySize;
                     s.DestinationPosition += (int)copySize;
-                    bs.NRawBytes -= copySize;
+                    bs.RawByteCount -= copySize;
 
                     break;
                 }
@@ -315,7 +315,7 @@ public static class LzfseDecoder
                 {
                     ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
 
-                    if (bs.NPayloadBytes > 0 && s.SourceEnd <= s.SourcePosition)
+                    if (bs.PayloadByteCount > 0 && s.SourceEnd <= s.SourcePosition)
                         return Constants.StatusSrcEmpty; // Need more source data
 
                     // Initialize LZVN decoder state
@@ -326,17 +326,17 @@ public static class LzfseDecoder
                         DestinationPosition = s.DestinationPosition,
                         DestinationStart = s.DestinationStart,
                         DestinationEnd = s.DestinationEnd,
-                        PreviousDistance = (int)bs.DPrev,
+                        PreviousDistance = (int)bs.PreviousDistance,
                         EndOfStream = false
                     };
 
                     // Limit to payload bytes
-                    if (dstate.SourceEnd - s.SourcePosition > bs.NPayloadBytes)
-                        dstate.SourceEnd = s.SourcePosition + (int)bs.NPayloadBytes;
+                    if (dstate.SourceEnd - s.SourcePosition > bs.PayloadByteCount)
+                        dstate.SourceEnd = s.SourcePosition + (int)bs.PayloadByteCount;
 
                     // Limit to raw bytes
-                    if (dstate.DestinationEnd - s.DestinationPosition > bs.NRawBytes)
-                        dstate.DestinationEnd = s.DestinationPosition + (int)bs.NRawBytes;
+                    if (dstate.DestinationEnd - s.DestinationPosition > bs.RawByteCount)
+                        dstate.DestinationEnd = s.DestinationPosition + (int)bs.RawByteCount;
 
                     // Run LZVN decoder
                     LzvnDecoder.Decode(ref dstate, s.SourceBuffer, s.DestinationBuffer);
@@ -345,28 +345,28 @@ public static class LzfseDecoder
                     int srcUsed = dstate.SourcePosition - s.SourcePosition;
                     int dstUsed = dstate.DestinationPosition - s.DestinationPosition;
 
-                    if (srcUsed > bs.NPayloadBytes || dstUsed > bs.NRawBytes)
+                    if (srcUsed > bs.PayloadByteCount || dstUsed > bs.RawByteCount)
                         return Constants.StatusError; // Sanity check
 
                     s.SourcePosition = dstate.SourcePosition;
                     s.DestinationPosition = dstate.DestinationPosition;
-                    bs.NPayloadBytes -= (uint)srcUsed;
-                    bs.NRawBytes -= (uint)dstUsed;
-                    bs.DPrev = (uint)dstate.PreviousDistance;
+                    bs.PayloadByteCount -= (uint)srcUsed;
+                    bs.RawByteCount -= (uint)dstUsed;
+                    bs.PreviousDistance = (uint)dstate.PreviousDistance;
 
                     // Test end of block - successful completion
-                    if (bs.NPayloadBytes == 0 && bs.NRawBytes == 0 && dstate.EndOfStream)
+                    if (bs.PayloadByteCount == 0 && bs.RawByteCount == 0 && dstate.EndOfStream)
                     {
                         s.BlockMagic = Constants.NoBlockMagic;
                         break; // Block done
                     }
 
                     // Check for destination buffer full
-                    if (bs.NRawBytes == 0)
+                    if (bs.RawByteCount == 0)
                         return Constants.StatusDstFull;
 
                     // Check for invalid states
-                    if (bs.NPayloadBytes == 0 || dstate.EndOfStream)
+                    if (bs.PayloadByteCount == 0 || dstate.EndOfStream)
                         return Constants.StatusError;
 
                     // Continue processing

@@ -5,7 +5,7 @@ namespace LzfseSharp.Decoder;
 /// </summary>
 internal struct LzvnCompressedBlockDecoderState
 {
-    public uint NRawBytes;
-    public uint NPayloadBytes;
-    public uint DPrev;
+    public uint RawByteCount;
+    public uint PayloadByteCount;
+    public uint PreviousDistance;
 }

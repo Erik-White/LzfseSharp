@@ -85,6 +85,7 @@ internal struct FseInStream
         AccumulatorBitCount -= bitCount;
         ulong result = Accumulator >> AccumulatorBitCount;
         Accumulator = Core.BitOperations.ExtractBits(Accumulator, 0, AccumulatorBitCount);
+
         return result;
     }
 }

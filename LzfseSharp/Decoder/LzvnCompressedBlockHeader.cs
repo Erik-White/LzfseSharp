@@ -9,6 +9,6 @@ namespace LzfseSharp.Decoder;
 internal struct LzvnCompressedBlockHeader
 {
     public uint Magic;
-    public uint NRawBytes;
-    public uint NPayloadBytes;
+    public uint RawByteCount;
+    public uint PayloadByteCount;
 }
