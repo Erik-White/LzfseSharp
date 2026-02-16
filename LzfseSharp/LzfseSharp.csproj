@@ -19,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="AstcSharp.Tests" />
-    <InternalsVisibleTo Include="AstcSharp.Benchmarks" />
+    <InternalsVisibleTo Include="LzfseSharp.Tests" />
+    <InternalsVisibleTo Include="LzfseSharp.Benchmarks" />
   </ItemGroup>
 
 </Project>
