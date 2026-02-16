@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>LzfseSharp</PackageId>
+    <Authors>Erik White</Authors>
+    <Description>A C# port of Apple's LZFSE (Lempel-Ziv Finite State Entropy) decompression algorithm. Provides high-performance decoding of LZFSE-compressed data.</Description>
+    <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Erik-White/LzfseSharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Erik-White/LzfseSharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>lzfse;compression;decompression;apple;decoder;lempel-ziv;fse</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="AstcSharp.Tests" />
+        <InternalsVisibleTo Include="AstcSharp.Benchmarks" />
+    </ItemGroup>
+
+</Project>
