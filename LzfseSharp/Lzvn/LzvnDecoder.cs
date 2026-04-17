@@ -396,6 +396,21 @@ internal static class LzvnDecoder
                 3);
         }
 
+        if (opcode == LzvnConstants.EndOfStreamOpcode)
+        {
+            // End of stream
+            return new OpcodeDecodeResult(-2, 0, 0, null, LzvnConstants.EndOfStreamOpcodeLength);
+        }
+
+        if (opcode == LzvnConstants.NopOpcode1 || opcode == LzvnConstants.NopOpcode2)
+        {
+            // NOP
+            if (sourceLength <= 1)
+                return new OpcodeDecodeResult(-1, 0, 0, null, 1);
+
+            return new OpcodeDecodeResult(0, 0, 0, null, 1);
+        }
+
         if ((opcode & 7) == LzvnConstants.PreviousDistanceFlag)
         {
             // Previous distance
@@ -412,21 +427,6 @@ internal static class LzvnDecoder
                 return new OpcodeDecodeResult(-1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, null, 3);
 
             return new OpcodeDecodeResult(1, (nuint)(opcode >> 6), (nuint)((opcode >> 3) & 7) + LzvnConstants.MatchLengthBias, MemoryOperations.Load2(source[(sourcePointer + 1)..]), 3);
-        }
-
-        if (opcode == LzvnConstants.EndOfStreamOpcode)
-        {
-            // End of stream
-            return new OpcodeDecodeResult(-2, 0, 0, null, LzvnConstants.EndOfStreamOpcodeLength);
-        }
-
-        if (opcode == LzvnConstants.NopOpcode1 || opcode == LzvnConstants.NopOpcode2)
-        {
-            // NOP
-            if (sourceLength <= 1)
-                return new OpcodeDecodeResult(-1, 0, 0, null, 1);
-
-            return new OpcodeDecodeResult(0, 0, 0, null, 1);
         }
 
         // Small distance

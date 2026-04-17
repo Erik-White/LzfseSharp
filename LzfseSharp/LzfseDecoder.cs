@@ -16,11 +16,7 @@ public static class LzfseDecoder
     /// <param name="dstBuffer">Destination buffer for decompressed data</param>
     /// <param name="srcBuffer">Source buffer containing compressed data</param>
     /// <returns>The number of bytes written to the destination buffer. Returns 0 on error.</returns>
-    /// <remarks>
-    /// This method decompresses the entire compressed stream. If the destination buffer is not
-    /// large enough to hold the entire decompressed output, only the first dstBuffer.Length bytes
-    /// will be written and that length will be returned.
-    /// </remarks>
+    /// <exception cref="ArgumentException">The destination buffer is too small to hold the decompressed output.</exception>
     public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer)
     {
         if (srcBuffer.Length == 0 || dstBuffer.Length == 0)
@@ -41,8 +37,10 @@ public static class LzfseDecoder
 
         int result = DecodeInternal(ref state);
 
-        // Return bytes written on success or when destination is full, 0 on error
-        return (result == Constants.StatusOk || result == Constants.StatusDstFull)
+        if (result == Constants.StatusDstFull)
+            throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
+
+        return result == Constants.StatusOk
             ? state.DestinationPosition - state.DestinationStart
             : 0;
     }
@@ -313,16 +311,12 @@ public static class LzfseDecoder
                         break; // Block done
                     }
 
-                    // Check for destination buffer full
-                    if (bs.RawByteCount == 0)
-                        return Constants.StatusDstFull;
-
-                    // Check for invalid states
-                    if (bs.PayloadByteCount == 0 || dstate.EndOfStream)
+                    // Check for invalid state
+                    if (bs.PayloadByteCount == 0 || bs.RawByteCount == 0 || dstate.EndOfStream)
                         return Constants.StatusError;
 
-                    // Continue processing
-                    break;
+                    // Block not done, state valid — need more destination space
+                    return Constants.StatusDstFull;
                 }
 
                 default:
