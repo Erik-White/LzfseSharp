@@ -64,6 +64,21 @@ public class LzfseDecoderTests
     }
 
     [Fact]
+    public void Decompress_DestinationTooSmall_ThrowsArgumentException()
+    {
+        byte[] dstBytes = new byte[3];
+        byte[] srcBytes = [
+            0x62, 0x76, 0x78, 0x2d,  // Magic: bvx-
+            0x05, 0x00, 0x00, 0x00,  // n_raw_bytes: 5
+            0x48, 0x65, 0x6c, 0x6c, 0x6f,  // "Hello"
+            0x62, 0x76, 0x78, 0x24   // End of stream magic
+        ];
+
+        var ex = Assert.Throws<ArgumentException>(() => LzfseDecoder.Decompress(dstBytes, srcBytes));
+        ex.ParamName.Should().Be("dstBuffer");
+    }
+
+    [Fact]
     public void Decompress_InvalidMagic_ReturnsZero()
     {
         Span<byte> dst = new byte[100];
