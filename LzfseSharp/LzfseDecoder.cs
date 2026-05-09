@@ -125,10 +125,17 @@ public static class LzfseDecoder
                             }
                             else
                             {
-                                // V1 header - fixed size
-                                const uint v1HeaderSize = 8 + 8 + 8 + 8 + 4 * 2 + 8 +
-                                                         2 * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
-                                                             Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
+                                // V1 header layout:
+                                //   8 * uint32  (magic, n_raw_bytes, n_payload_bytes, n_literals,
+                                //                n_matches, n_literal_payload_bytes, n_lmd_payload_bytes, literal_bits)
+                                //   4 * uint16  (literal_state[4])
+                                //   1 * uint32  (lmd_bits)
+                                //   3 * uint16  (l_state, m_state, d_state)
+                                //   freq tables (uint16 per symbol)
+                                const uint v1HeaderSize = 8 * sizeof(uint) + 4 * sizeof(ushort)
+                                                        + sizeof(uint) + 3 * sizeof(ushort)
+                                                        + sizeof(ushort) * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
+                                                                            Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
 
                                 if (s.SourcePosition + v1HeaderSize > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
