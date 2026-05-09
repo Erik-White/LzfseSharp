@@ -5,14 +5,11 @@ using Xunit;
 namespace LzfseSharp.Tests;
 
 /// <summary>
-/// Tests that exercise the LZVN decoder's partial-state / resume path.
-/// Prior to the fix, <see cref="LzvnDecoder.Decode"/> assumed every entry into a
-/// Process* helper had to skip over an opcode at <c>sourcePosition</c>. On a
-/// resume (triggered by <c>StatusDstFull</c> on the previous call), the opcode
-/// has already been consumed — re-advancing over it would eat part of the next
-/// opcode's bytes and corrupt output.
+/// Tests that drive <see cref="LzvnDecoder.Decode"/> directly (below the outer
+/// <see cref="LzfseDecoder"/> framing) to exercise paths that the public API either
+/// currently hides or can't trigger with valid reference-encoder output.
 /// </summary>
-public class LzvnResumeTests
+public class LzvnDecoderTests
 {
     [Fact]
     public void Decode_ResumePendingLiteral_DoesNotReconsumeNextOpcode()
@@ -91,5 +88,33 @@ public class LzvnResumeTests
         state.DestinationPosition.Should().Be(8);
         dst.Should().Equal((byte)'A', (byte)'B', (byte)'C', (byte)'D', (byte)'A', (byte)'B', (byte)'C', (byte)'D');
         state.SourcePosition.Should().Be(src.Length);
+    }
+
+    [Theory]
+    [InlineData(1)] // just the 0x06 byte
+    [InlineData(4)] // 0x06 + partial padding
+    [InlineData(7)] // one byte short of full marker
+    public void Decode_TruncatedEosMarker_DoesNotReportEndOfStream(int srcLen)
+    {
+        // The LZVN EOS marker is the byte 0x06 followed by 7 padding bytes. If the
+        // decoder accepts 0x06 without verifying the full 8-byte marker, a crafted
+        // stream can make SourcePosition advance past SourceEnd and report success.
+        byte[] src = new byte[srcLen];
+        src[0] = 0x06;
+
+        byte[] dst = new byte[16];
+        LzvnDecoderState state = new LzvnDecoderState
+        {
+            SourcePosition = 0,
+            SourceEnd = src.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = dst.Length,
+        };
+
+        LzvnDecoder.Decode(ref state, src, dst);
+
+        state.EndOfStream.Should().BeFalse("a truncated EOS marker must not be treated as end of stream");
+        state.SourcePosition.Should().BeLessThanOrEqualTo(src.Length, "decoder must not advance past the end of the source");
     }
 }

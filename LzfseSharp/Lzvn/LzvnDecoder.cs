@@ -375,7 +375,11 @@ internal static class LzvnDecoder
 
         if (opcode == LzvnConstants.EndOfStreamOpcode)
         {
-            // End of stream
+            // End of stream: the EOS marker is 8 bytes (0x06 + 7 padding).
+            // Require the full marker to be present so a truncated EOS is not silently accepted.
+            if (sourceLength < LzvnConstants.EndOfStreamOpcodeLength)
+                return new OpcodeDecodeResult(-1, 0, 0, null, LzvnConstants.EndOfStreamOpcodeLength);
+
             return new OpcodeDecodeResult(-2, 0, 0, null, LzvnConstants.EndOfStreamOpcodeLength);
         }
 
