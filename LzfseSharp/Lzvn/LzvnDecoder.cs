@@ -32,7 +32,10 @@ internal static class LzvnDecoder
         nuint L;
         int opcodeLength;
 
-        // Handle partially expanded match saved in state
+        // Handle partially expanded match saved in state. The opcode that produced
+        // these pending L/M/D values was already consumed by the prior Decode call,
+        // so sourcePosition already points past it — pass opcodeLength: 0 so the
+        // Process* helpers do not advance over a phantom opcode.
         if (state.LiteralLength != 0 || state.MatchLength != 0)
         {
             L = state.LiteralLength;
@@ -42,7 +45,7 @@ internal static class LzvnDecoder
 
             if (M == 0)
             {
-                if (!ProcessLiteral(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, ref destinationLength, ref sourceLength, D, out var partialState1))
+                if (!ProcessLiteral(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, ref destinationLength, ref sourceLength, D, opcodeLength: 0, out var partialState1))
                 {
                     state = partialState1;
                     return;
@@ -58,7 +61,7 @@ internal static class LzvnDecoder
             }
             else
             {
-                if (!ProcessLiteralAndMatch(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, M, D, state.DestinationStart, ref destinationLength, ref sourceLength, out var partialState3))
+                if (!ProcessLiteralAndMatch(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, M, D, state.DestinationStart, ref destinationLength, ref sourceLength, opcodeLength: 0, out var partialState3))
                 {
                     state = partialState3;
                     return;
@@ -107,7 +110,7 @@ internal static class LzvnDecoder
             if (L > 0 && M > 0)
             {
                 // Literal and match
-                if (!ProcessLiteralAndMatch(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, M, D, state.DestinationStart, ref destinationLength, ref sourceLength, out var partialState))
+                if (!ProcessLiteralAndMatch(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, M, D, state.DestinationStart, ref destinationLength, ref sourceLength, opcodeLength, out var partialState))
                 {
                     state = partialState;
                     state.MatchDistance = D;
@@ -117,7 +120,7 @@ internal static class LzvnDecoder
             else if (L > 0)
             {
                 // Literal only
-                if (!ProcessLiteral(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, ref destinationLength, ref sourceLength, D, out var partialState))
+                if (!ProcessLiteral(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, ref destinationLength, ref sourceLength, D, opcodeLength, out var partialState))
                 {
                     state = partialState;
                     return;
@@ -155,12 +158,11 @@ internal static class LzvnDecoder
         int dstStart,
         ref int destinationLength,
         ref int sourceLength,
+        int opcodeLength,
         out LzvnDecoderState partialState)
     {
         partialState = default;
 
-        // Advance past opcode
-        int opcodeLength = sourcePosition < src.Length ? GetOpcodeLength(src[sourcePosition]) : 1;
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
@@ -205,11 +207,11 @@ internal static class LzvnDecoder
         ref int destinationLength,
         ref int sourceLength,
         nuint D,
+        int opcodeLength,
         out LzvnDecoderState partialState)
     {
         partialState = default;
 
-        int opcodeLength = sourcePosition < source.Length ? GetOpcodeLength(source[sourcePosition]) : 1;
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
@@ -259,31 +261,6 @@ internal static class LzvnDecoder
 
         destinationLength -= (int)M;
         return true;
-    }
-
-    /// <summary>
-    /// Calculate the opcode length based on the opcode byte
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetOpcodeLength(byte opcode)
-    {
-        // Check opcode category and return appropriate length
-        if (opcode >= LzvnConstants.LiteralOpcodeStart && opcode < LzvnConstants.LiteralOpcodeEnd)
-        {
-            return opcode == LzvnConstants.LargeLiteralOpcode ? 2 : 1;
-        }
-
-        if (opcode >= LzvnConstants.MediumDistanceOpcodeStart && opcode < LzvnConstants.MediumDistanceOpcodeEnd)
-        {
-            return 3;
-        }
-
-        return (opcode & 7) switch
-        {
-            LzvnConstants.PreviousDistanceFlag => 1,
-            LzvnConstants.LargeDistanceFlag => 3,
-            _ => 2
-        };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
