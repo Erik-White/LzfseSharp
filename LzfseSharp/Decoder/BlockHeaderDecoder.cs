@@ -214,6 +214,15 @@ internal static class BlockHeaderDecoder
         if (Fse.FseDecoder.CheckFreq(header.LiteralFreq, Constants.EncodeLiteralSymbols, Constants.EncodeLiteralStates) != 0)
             validationErrors |= 1 << 13;
 
+        // NLiterals must be a multiple of 4: the literal decoder reads 4 at a time.
+        if ((header.NLiterals & 3) != 0)
+            validationErrors |= 1 << 14;
+
+        // NPayloadBytes is redundant in the stream (NLiteralPayloadBytes + NLmdPayloadBytes),
+        // but when supplied it must agree with the two component fields.
+        if (header.NPayloadBytes != header.NLiteralPayloadBytes + header.NLmdPayloadBytes)
+            validationErrors |= 1 << 15;
+
         return validationErrors != 0 ? (validationErrors | ErrorFlag) : 0;
     }
 }

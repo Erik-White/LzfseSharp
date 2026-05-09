@@ -36,7 +36,10 @@ internal static class FseDecoder
     }
 
     /// <summary>
-    /// Check frequency table validity
+    /// Check frequency table validity. Normalised frequencies must sum to exactly
+    /// <paramref name="numberOfStates"/>; a sum below would leave decoder-table tail
+    /// entries uninitialised (or stale from a prior block within the same decompress
+    /// call), and a sum above would overflow during initialisation.
     /// </summary>
     public static int CheckFreq(ReadOnlySpan<ushort> freqTable, int tableSize, int numberOfStates)
     {
@@ -47,7 +50,7 @@ internal static class FseDecoder
             sumOfFreq += freqTable[i];
         }
 
-        return sumOfFreq > numberOfStates ? -1 : 0;
+        return sumOfFreq != numberOfStates ? -1 : 0;
     }
 
     /// <summary>
@@ -92,6 +95,12 @@ internal static class FseDecoder
                 table[tableIndex++] = entry;
             }
         }
+
+        // Defense in depth: zero any tail left behind when a malformed freq table has
+        // sum < stateCount. CheckFreq should have rejected this already, but the tables
+        // are reused across blocks and we do not want stale entries from a previous
+        // decode to be readable by a later one.
+        table[tableIndex..stateCount].Clear();
 
         return 0; // OK
     }
@@ -144,5 +153,8 @@ internal static class FseDecoder
                 table[tableIndex++] = entry;
             }
         }
+
+        // Defense in depth: see comment in InitDecoderTable.
+        table[tableIndex..stateCount].Clear();
     }
 }

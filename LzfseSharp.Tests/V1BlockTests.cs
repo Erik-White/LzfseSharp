@@ -44,6 +44,125 @@ public class V1BlockTests
         result.Should().Be(0);
     }
 
+    private delegate void HeaderMutation(ref LzfseCompressedBlockHeaderV1 header);
+
+    [Fact]
+    public void Decompress_V1BlockWithNLiteralsNotMultipleOf4_Rejected()
+    {
+        byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) => h.NLiterals -= 1);
+
+        byte[] dst = new byte[50000];
+        int result = LzfseDecoder.Decompress(dst, v1Stream);
+
+        result.Should().Be(0, "NLiterals not divisible by 4 must be rejected by CheckBlockHeaderV1");
+    }
+
+    [Fact]
+    public void Decompress_V1BlockWithMismatchedPayloadSum_Rejected()
+    {
+        byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) => h.NPayloadBytes += 1);
+
+        byte[] dst = new byte[50000];
+        int result = LzfseDecoder.Decompress(dst, v1Stream);
+
+        result.Should().Be(0, "NPayloadBytes disagreeing with the literal/LMD sum must be rejected");
+    }
+
+    [Fact]
+    public void Decompress_V1BlockWithFreqSumBelowStateCount_Rejected()
+    {
+        // Shave 1 off the largest entry in the literal frequency table so the sum
+        // drops below EncodeLiteralStates. Under the old CheckFreq (sum > n), this
+        // would pass validation and InitDecoderTable would leave a tail of stale
+        // entries. Under the tightened check (sum != n) it must be rejected.
+        byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 header) =>
+        {
+            int maxIdx = 0;
+            for (int i = 1; i < header.LiteralFreq.Length; i++)
+            {
+                if (header.LiteralFreq[i] > header.LiteralFreq[maxIdx])
+                    maxIdx = i;
+            }
+            header.LiteralFreq[maxIdx] -= 1;
+        });
+
+        byte[] dst = new byte[50000];
+        int result = LzfseDecoder.Decompress(dst, v1Stream);
+
+        result.Should().Be(0, "a literal frequency table whose sum is below EncodeLiteralStates must be rejected");
+    }
+
+    private static byte[] RepackReferenceAsV1(HeaderMutation mutate)
+    {
+        // Input must be large enough that the reference encoder picks a bvx2 block
+        // (it prefers LZVN for small inputs).
+        byte[] original = new byte[50000];
+        for (int i = 0; i < original.Length; i++)
+            original[i] = (byte)(i % 37);
+
+        byte[] compressedBuffer = new byte[original.Length * 2 + 1024];
+        int compressedSize = LzfseCompressor.Compress(original, compressedBuffer);
+        ReadOnlySpan<byte> v2Stream = compressedBuffer.AsSpan(0, compressedSize);
+
+        // Walk until the first bvx2 block, decode its header, mutate, repack, and
+        // splice back into the stream.
+        using MemoryStream output = new();
+        int pos = 0;
+        bool mutated = false;
+        while (pos < v2Stream.Length)
+        {
+            uint magic = MemoryOperations.Load4(v2Stream[pos..]);
+            switch (magic)
+            {
+                case Constants.EndOfStreamBlockMagic:
+                    output.Write(v2Stream.Slice(pos, 4));
+                    pos = v2Stream.Length;
+                    break;
+
+                case Constants.UncompressedBlockMagic:
+                {
+                    int rawBytes = (int)MemoryOperations.Load4(v2Stream[(pos + 4)..]);
+                    int blockSize = 8 + rawBytes;
+                    output.Write(v2Stream.Slice(pos, blockSize));
+                    pos += blockSize;
+                    break;
+                }
+
+                case Constants.CompressedLzvnBlockMagic:
+                {
+                    int payloadBytes = (int)MemoryOperations.Load4(v2Stream[(pos + 8)..]);
+                    int blockSize = 12 + payloadBytes;
+                    output.Write(v2Stream.Slice(pos, blockSize));
+                    pos += blockSize;
+                    break;
+                }
+
+                case Constants.CompressedV2BlockMagic:
+                {
+                    BlockHeaderDecoder.V2ToV1DecodeResult decoded = BlockHeaderDecoder.DecodeV2ToV1(v2Stream[pos..]);
+                    decoded.Status.Should().Be(0);
+                    LzfseCompressedBlockHeaderV1 h = decoded.Header;
+                    if (!mutated)
+                    {
+                        mutate(ref h);
+                        mutated = true;
+                    }
+                    output.Write(EncodeV1Header(h));
+                    int payloadLen = (int)(decoded.Header.NLiteralPayloadBytes + decoded.Header.NLmdPayloadBytes);
+                    output.Write(v2Stream.Slice(pos + decoded.HeaderSize, payloadLen));
+                    pos += decoded.HeaderSize + payloadLen;
+                    break;
+                }
+
+                default:
+                    throw new InvalidOperationException($"Unexpected magic 0x{magic:X8} at {pos}");
+            }
+        }
+
+        mutated.Should().BeTrue("test relies on the reference encoder emitting at least one bvx2 block");
+        return output.ToArray();
+    }
+
     private static byte[] RepackV2BlocksAsV1(ReadOnlySpan<byte> v2Stream, out int v2BlocksConverted)
     {
         v2BlocksConverted = 0;
