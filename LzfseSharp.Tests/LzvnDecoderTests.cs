@@ -90,6 +90,123 @@ public class LzvnDecoderTests
         state.SourcePosition.Should().Be(src.Length);
     }
 
+    [Fact]
+    public void Decode_PartialMatchResume_ProducesCorrectOutput()
+    {
+        // Build a payload that produces: 4-byte literal "ABCD" then a match of M=6, D=4.
+        // Split the decode at destinationEnd=7 (after 4 literal + 3 of the 6 match bytes).
+        // On resume we expect the remaining 3 bytes of the match to be copied — this
+        // exercises both bug #8 (framing fields must survive) and bug #9 (M must be the
+        // OUTSTANDING bytes, not the original 6).
+        //
+        // Opcode: small distance "LLMMMDDD" style. Using the 2-byte small-distance encoding:
+        //   top 2 bits = L (2 bits, range 0..3)
+        //   bits 3..5  = M - 3 (3 bits, range 3..10)
+        //   bits 0..2  = D high 3 bits
+        //   next byte  = D low 8 bits
+        // For L=4 we need to use a preceding large-literal opcode, so it's simpler to
+        // construct with a large-literal (0xe0) + len byte + 4 literal bytes, then a
+        // small-distance opcode with L=0, M=6, D=4.
+
+        byte[] payload = BuildLiteralThenMatch(literal: "ABCD"u8.ToArray(), matchLen: 6, matchDist: 4);
+
+        byte[] expected = new byte[10];
+        "ABCD"u8.CopyTo(expected);
+        // match copies bytes 0..5 from positions (4-4)..(4+6-4-1) = 0..5 into 4..9
+        for (int i = 0; i < 6; i++)
+            expected[4 + i] = expected[i];
+
+        byte[] fullDst = new byte[expected.Length];
+        RunLzvnDecoder(payload, fullDst, fullDst.Length);
+        fullDst.Should().Equal(expected, "sanity check: one-shot decode must match the expected output");
+
+        // Now run in two parts: stop at destinationLength=7, then finish.
+        byte[] splitDst = new byte[expected.Length];
+        LzvnDecoderState state = new LzvnDecoderState
+        {
+            SourcePosition = 0,
+            SourceEnd = payload.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = 7,
+        };
+        LzvnDecoder.Decode(ref state, payload, splitDst);
+        state.DestinationPosition.Should().Be(7);
+        state.MatchLength.Should().Be((nuint)3, "3 of 6 match bytes remain outstanding after the first call");
+
+        // Resume — the caller only needs to extend DestinationEnd, since the fix preserves
+        // all other framing fields across the dst-full return.
+        state.DestinationEnd = expected.Length;
+        LzvnDecoder.Decode(ref state, payload, splitDst);
+
+        state.DestinationPosition.Should().Be(expected.Length);
+        state.EndOfStream.Should().BeTrue();
+        splitDst.Should().Equal(expected, "resumed decode must produce the same output as a one-shot decode");
+    }
+
+    [Fact]
+    public void Decode_PartialLiteralResume_ProducesCorrectOutput()
+    {
+        // Large-literal (16 bytes) split mid-copy. Exercises CopyLiteralBytes' resume path.
+        byte[] literal = "0123456789ABCDEF"u8.ToArray();
+        byte[] payload = new byte[2 + literal.Length + 8];
+        payload[0] = 0xe0;                      // large literal
+        payload[1] = (byte)(literal.Length - LzfseSharp.Lzvn.LzvnConstants.LargeLiteralBias);
+        literal.CopyTo(payload, 2);
+        payload[2 + literal.Length] = 0x06;     // EOS
+        // trailing 7 zeros already present from array init
+
+        byte[] splitDst = new byte[literal.Length];
+        LzvnDecoderState state = new LzvnDecoderState
+        {
+            SourcePosition = 0,
+            SourceEnd = payload.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = 10,
+        };
+        LzvnDecoder.Decode(ref state, payload, splitDst);
+        state.DestinationPosition.Should().Be(10);
+        state.LiteralLength.Should().Be((nuint)(literal.Length - 10), "6 of 16 literal bytes remain outstanding");
+
+        state.DestinationEnd = literal.Length;
+        LzvnDecoder.Decode(ref state, payload, splitDst);
+
+        state.DestinationPosition.Should().Be(literal.Length);
+        state.EndOfStream.Should().BeTrue();
+        splitDst.Should().Equal(literal);
+    }
+
+    private static byte[] BuildLiteralThenMatch(byte[] literal, int matchLen, int matchDist)
+    {
+        // Small literal opcode: 0xe0 | L with L in 1..15 (0 is unused, 0xe0 is large literal).
+        // Then a "large distance" opcode byte (0bLLMMM111) + 2-byte little-endian D.
+        //   L=0 (no attached literal), M = encodedM + 3, where encodedM is bits 3..5.
+        if (literal.Length < 1 || literal.Length > 15)
+            throw new ArgumentException($"literal length {literal.Length} not encodable in small-literal opcode");
+
+        int smallLiteralOpcodeLen = 1;
+        int largeDistanceOpcodeLen = 3;
+        byte[] payload = new byte[smallLiteralOpcodeLen + literal.Length + largeDistanceOpcodeLen + 8];
+        int p = 0;
+
+        payload[p++] = (byte)(0xe0 | literal.Length);
+        literal.CopyTo(payload, p);
+        p += literal.Length;
+
+        int encodedM = matchLen - LzfseSharp.Lzvn.LzvnConstants.MatchLengthBias;
+        if (encodedM < 0 || encodedM > 7)
+            throw new ArgumentException($"matchLen {matchLen} not encodable in single large-distance opcode");
+        payload[p++] = (byte)((0 << 6) | (encodedM << 3) | 0x07);
+        payload[p++] = (byte)(matchDist & 0xff);
+        payload[p++] = (byte)((matchDist >> 8) & 0xff);
+
+        payload[p++] = 0x06; // EOS
+        // remaining 7 bytes are already zero
+
+        return payload;
+    }
+
     [Theory]
     [InlineData(1)] // just the 0x06 byte
     [InlineData(4)] // 0x06 + partial padding
@@ -116,5 +233,18 @@ public class LzvnDecoderTests
 
         state.EndOfStream.Should().BeFalse("a truncated EOS marker must not be treated as end of stream");
         state.SourcePosition.Should().BeLessThanOrEqualTo(src.Length, "decoder must not advance past the end of the source");
+    }
+
+    private static void RunLzvnDecoder(byte[] payload, byte[] dst, int destinationEnd)
+    {
+        LzvnDecoderState state = new()
+        {
+            SourcePosition = 0,
+            SourceEnd = payload.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = destinationEnd,
+        };
+        LzvnDecoder.Decode(ref state, payload, dst);
     }
 }

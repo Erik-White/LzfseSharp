@@ -43,37 +43,21 @@ internal static class LzvnDecoder
             D = state.MatchDistance;
             state.LiteralLength = state.MatchLength = state.MatchDistance = 0;
 
+            bool resumeOk;
             if (M == 0)
-            {
-                if (!ProcessLiteral(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, ref destinationLength, ref sourceLength, D, opcodeLength: 0, out var partialState1))
-                {
-                    state = partialState1;
-                    return;
-                }
-            }
+                resumeOk = ProcessLiteral(ref state, dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, ref L, D, ref destinationLength, ref sourceLength, opcodeLength: 0);
             else if (L == 0)
-            {
-                if (!ProcessMatch(dstBuffer, ref destinationPosition, M, D, ref destinationLength, srcBuffer, ref sourcePosition, 0, ref sourceLength, out var partialState2))
-                {
-                    state = partialState2;
-                    return;
-                }
-            }
+                resumeOk = ProcessMatch(ref state, dstBuffer, ref destinationPosition, ref M, D, ref destinationLength, srcBuffer, ref sourcePosition, opcodeLength: 0, ref sourceLength);
             else
-            {
-                if (!ProcessLiteralAndMatch(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, M, D, state.DestinationStart, ref destinationLength, ref sourceLength, opcodeLength: 0, out var partialState3))
-                {
-                    state = partialState3;
-                    return;
-                }
-            }
+                resumeOk = ProcessLiteralAndMatch(ref state, dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, ref L, ref M, D, ref destinationLength, ref sourceLength, opcodeLength: 0);
 
-            D = state.MatchDistance;
+            if (!resumeOk)
+                return;
         }
 
         while (sourcePosition < state.SourceEnd)
         {
-            byte opcode =srcBuffer[sourcePosition];
+            byte opcode = srcBuffer[sourcePosition];
 
             // Decode opcode and extract L, M, D values
             OpcodeDecodeResult decodeResult = DecodeOpcode(opcode, srcBuffer, sourcePosition, sourceLength);
@@ -107,164 +91,138 @@ internal static class LzvnDecoder
             // Status == 1: normal opcode
             if (decodeResult.Status != 1)
                 break; // Status was -1 (source truncated)
+
+            bool opOk;
             if (L > 0 && M > 0)
-            {
-                // Literal and match
-                if (!ProcessLiteralAndMatch(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, M, D, state.DestinationStart, ref destinationLength, ref sourceLength, opcodeLength, out var partialState))
-                {
-                    state = partialState;
-                    state.MatchDistance = D;
-                    return;
-                }
-            }
+                opOk = ProcessLiteralAndMatch(ref state, dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, ref L, ref M, D, ref destinationLength, ref sourceLength, opcodeLength);
             else if (L > 0)
-            {
-                // Literal only
-                if (!ProcessLiteral(dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, L, ref destinationLength, ref sourceLength, D, opcodeLength, out var partialState))
-                {
-                    state = partialState;
-                    return;
-                }
-            }
+                opOk = ProcessLiteral(ref state, dstBuffer, ref destinationPosition, srcBuffer, ref sourcePosition, ref L, D, ref destinationLength, ref sourceLength, opcodeLength);
             else if (M > 0)
-            {
-                // Match only
-                if (!ProcessMatch(dstBuffer, ref destinationPosition, M, D, ref destinationLength, srcBuffer, ref sourcePosition, opcodeLength, ref sourceLength, out var partialState))
-                {
-                    state = partialState;
-                    return;
-                }
-            }
+                opOk = ProcessMatch(ref state, dstBuffer, ref destinationPosition, ref M, D, ref destinationLength, srcBuffer, ref sourcePosition, opcodeLength, ref sourceLength);
             else
             {
                 // Neither L nor M, just skip the opcode
                 sourcePosition += opcodeLength;
                 sourceLength -= opcodeLength;
+                continue;
             }
+
+            if (!opOk)
+                return;
         }
+
         state.SourcePosition = sourcePosition;
         state.DestinationPosition = destinationPosition;
         state.PreviousDistance = (int)D;
     }
 
+    // The Process* and Copy* helpers below return true when the op completed and false
+    // when the destination was exhausted mid-op. On false they update `state` with the
+    // bookkeeping needed to resume (position + remaining L/M/D), leaving framing fields
+    // (SourceEnd, DestinationStart/End, PreviousDistance, EndOfStream) untouched so the
+    // caller can call Decode again without re-initialising them.
+
     private static bool ProcessLiteralAndMatch(
+        ref LzvnDecoderState state,
         Span<byte> dst,
         ref int destinationPosition,
         ReadOnlySpan<byte> src,
         ref int sourcePosition,
-        nuint L,
-        nuint M,
+        ref nuint L,
+        ref nuint M,
         nuint D,
-        int dstStart,
         ref int destinationLength,
         ref int sourceLength,
-        int opcodeLength,
-        out LzvnDecoderState partialState)
+        int opcodeLength)
     {
-        partialState = default;
-
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
-        // Copy literal
-        if (!CopyLiteralBytes(dst, ref destinationPosition, src, ref sourcePosition, L, destinationLength, ref sourceLength))
+        if (!CopyLiteralBytes(dst, ref destinationPosition, src, ref sourcePosition, ref L, ref destinationLength, ref sourceLength))
         {
-            partialState.SourcePosition = sourcePosition;
-            partialState.DestinationPosition = destinationPosition;
-            partialState.LiteralLength = L;
-            partialState.MatchLength = M;
-            partialState.MatchDistance = D;
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.LiteralLength = L;
+            state.MatchLength = M;
+            state.MatchDistance = D;
             return false;
         }
 
-        destinationLength -= (int)L;
-
-        // Validate match distance
-        if (D > (nuint)(destinationPosition - dstStart) || D == 0)
+        // Validate match distance against output written so far.
+        if (D > (nuint)(destinationPosition - state.DestinationStart) || D == 0)
             return false;
 
-        // Copy match
-        if (!CopyMatchBytes(dst, ref destinationPosition, M, D, destinationLength))
+        if (!CopyMatchBytes(dst, ref destinationPosition, ref M, D, ref destinationLength))
         {
-            partialState.SourcePosition = sourcePosition;
-            partialState.DestinationPosition = destinationPosition;
-            partialState.LiteralLength = 0;
-            partialState.MatchLength = M;
-            partialState.MatchDistance = D;
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.LiteralLength = 0;
+            state.MatchLength = M;
+            state.MatchDistance = D;
             return false;
         }
 
-        destinationLength -= (int)M;
         return true;
     }
 
     private static bool ProcessLiteral(
+        ref LzvnDecoderState state,
         Span<byte> destination,
         ref int destinationPosition,
         ReadOnlySpan<byte> source,
         ref int sourcePosition,
-        nuint L,
+        ref nuint L,
+        nuint D,
         ref int destinationLength,
         ref int sourceLength,
-        nuint D,
-        int opcodeLength,
-        out LzvnDecoderState partialState)
+        int opcodeLength)
     {
-        partialState = default;
-
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
-        if (!CopyLiteralBytes(destination, ref destinationPosition, source, ref sourcePosition, L, destinationLength, ref sourceLength))
+        if (!CopyLiteralBytes(destination, ref destinationPosition, source, ref sourcePosition, ref L, ref destinationLength, ref sourceLength))
         {
-            partialState.SourcePosition = sourcePosition;
-            partialState.DestinationPosition = destinationPosition;
-            partialState.LiteralLength = L;
-            partialState.MatchLength = 0;
-            partialState.MatchDistance = D;
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.LiteralLength = L;
+            state.MatchLength = 0;
+            state.MatchDistance = D;
             return false;
         }
 
-        destinationLength -= (int)L;
         return true;
     }
 
     private static bool ProcessMatch(
+        ref LzvnDecoderState state,
         Span<byte> destination,
         ref int destinationPosition,
-        nuint M,
+        ref nuint M,
         nuint D,
         ref int destinationLength,
         ReadOnlySpan<byte> source,
         ref int sourcePosition,
         int opcodeLength,
-        ref int sourceLength,
-        out LzvnDecoderState partialState)
+        ref int sourceLength)
     {
-        partialState = default;
+        sourcePosition += opcodeLength;
+        sourceLength -= opcodeLength;
 
-        if (opcodeLength > 0)
+        if (!CopyMatchBytes(destination, ref destinationPosition, ref M, D, ref destinationLength))
         {
-            sourcePosition += opcodeLength;
-            sourceLength -= opcodeLength;
-        }
-
-        if (!CopyMatchBytes(destination, ref destinationPosition, M, D, destinationLength))
-        {
-            partialState.SourcePosition = sourcePosition;
-            partialState.DestinationPosition = destinationPosition;
-            partialState.LiteralLength = 0;
-            partialState.MatchLength = M;
-            partialState.MatchDistance = D;
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.LiteralLength = 0;
+            state.MatchLength = M;
+            state.MatchDistance = D;
             return false;
         }
 
-        destinationLength -= (int)M;
         return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool CopyLiteralBytes(Span<byte> dst, ref int destinationPosition, ReadOnlySpan<byte> src, ref int sourcePosition, nuint L, int destinationLength, ref int sourceLength)
+    private static bool CopyLiteralBytes(Span<byte> dst, ref int destinationPosition, ReadOnlySpan<byte> src, ref int sourcePosition, ref nuint L, ref int destinationLength, ref int sourceLength)
     {
         if (destinationLength >= 4 && sourceLength >= 4 && L <= 3)
         {
@@ -277,10 +235,16 @@ internal static class LzvnDecoder
         }
         else if (L > (nuint)destinationLength)
         {
-            for (int i = 0; i < destinationLength; i++)
+            // Partial copy: fill remaining destination, return false with L reduced to
+            // the bytes still outstanding.
+            int copied = destinationLength;
+            for (int i = 0; i < copied; i++)
                 dst[destinationPosition + i] = src[sourcePosition + i];
-            sourcePosition += destinationLength;
-            sourceLength -= destinationLength;
+            destinationPosition += copied;
+            sourcePosition += copied;
+            sourceLength -= copied;
+            destinationLength = 0;
+            L -= (nuint)copied;
             return false;
         }
         else
@@ -291,11 +255,13 @@ internal static class LzvnDecoder
         destinationPosition += (int)L;
         sourcePosition += (int)L;
         sourceLength -= (int)L;
+        destinationLength -= (int)L;
+        L = 0;
         return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool CopyMatchBytes(Span<byte> dst, ref int destinationPosition, nuint M, nuint D, int destinationLength)
+    private static bool CopyMatchBytes(Span<byte> dst, ref int destinationPosition, ref nuint M, nuint D, ref int destinationLength)
     {
         // Fast path: 8-byte copies when distance is at least 8
         // This handles overlapping copies correctly by reading most recent writes
@@ -311,12 +277,19 @@ internal static class LzvnDecoder
         }
         else
         {
-            for (int i = 0; i < destinationLength; i++)
+            // Partial copy: fill remaining destination, leave M reduced to outstanding bytes.
+            int copied = destinationLength;
+            for (int i = 0; i < copied; i++)
                 dst[destinationPosition + i] = dst[destinationPosition + i - (int)D];
+            destinationPosition += copied;
+            destinationLength = 0;
+            M -= (nuint)copied;
             return false;
         }
 
         destinationPosition += (int)M;
+        destinationLength -= (int)M;
+        M = 0;
         return true;
     }
 
