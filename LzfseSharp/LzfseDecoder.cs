@@ -15,23 +15,42 @@ public static class LzfseDecoder
     /// </summary>
     /// <param name="dstBuffer">Destination buffer for decompressed data</param>
     /// <param name="srcBuffer">Source buffer containing compressed data</param>
-    /// <returns>The number of bytes written to the destination buffer. Returns 0 on error.</returns>
+    /// <returns>
+    /// The number of bytes written to the destination buffer. 0 when
+    /// the source was empty, destination was empty, source was truncated, or the stream was malformed.
+    /// </returns>
     /// <exception cref="ArgumentException">The destination buffer is too small to hold the decompressed output.</exception>
     public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer)
     {
+        int written = Decompress(dstBuffer, srcBuffer, out DecompressStatus status);
+        if (status == DecompressStatus.DestinationFull)
+            throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
+        return written;
+    }
+
+    /// <summary>
+    /// Decompresses LZFSE-compressed data from source buffer to destination buffer
+    /// </summary>
+    /// <param name="dstBuffer">Destination buffer for decompressed data.</param>
+    /// <param name="srcBuffer">Source buffer containing compressed data.</param>
+    /// <param name="status">Set to indicate whether decoding completed, the source was truncated, the destination was too small, or the stream was malformed.</param>
+    /// <returns>
+    /// The number of bytes written to the destination buffer. May be less than the
+    /// stream's uncompressed size when <paramref name="status"/> is <see cref="DecompressStatus.DestinationFull"/>.
+    /// </returns>
+    public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer, out DecompressStatus status)
+    {
         if (srcBuffer.Length == 0 || dstBuffer.Length == 0)
+        {
+            status = DecompressStatus.SourceTruncated;
             return 0;
+        }
 
         LzfseDecoderState state = default;
         state.SourceBuffer = srcBuffer;
         state.DestinationBuffer = dstBuffer;
-        state.SourcePosition = 0;
-        state.SourceStart = 0;
         state.SourceEnd = srcBuffer.Length;
-        state.DestinationPosition = 0;
-        state.DestinationStart = 0;
         state.DestinationEnd = dstBuffer.Length;
-        state.EndOfStream = false;
         state.BlockMagic = Constants.NoBlockMagic;
         state.CompressedLzfseBlockState = LzfseCompressedBlockDecoderState.Rent();
 
@@ -45,12 +64,18 @@ public static class LzfseDecoder
             state.CompressedLzfseBlockState.Return();
         }
 
-        if (result == Constants.StatusDstFull)
-            throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
+        status = result switch
+        {
+            Constants.StatusOk => DecompressStatus.Ok,
+            Constants.StatusSrcEmpty => DecompressStatus.SourceTruncated,
+            Constants.StatusDstFull => DecompressStatus.DestinationFull,
+            _ => DecompressStatus.Malformed,
+        };
 
-        return result == Constants.StatusOk
-            ? state.DestinationPosition - state.DestinationStart
-            : 0;
+        // Always return the bytes actually written. This is meaningful even when the
+        // status is DestinationFull (caller can grow the buffer and retry) or when
+        // the stream turned out to be malformed mid-way through a multi-block stream.
+        return state.DestinationPosition;
     }
 
     /// <summary>
@@ -133,10 +158,17 @@ public static class LzfseDecoder
                             }
                             else
                             {
-                                // V1 header - fixed size
-                                const uint v1HeaderSize = 8 + 8 + 8 + 8 + 4 * 2 + 8 +
-                                                         2 * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
-                                                             Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
+                                // V1 header layout:
+                                //   8 * uint32  (magic, n_raw_bytes, n_payload_bytes, n_literals,
+                                //                n_matches, n_literal_payload_bytes, n_lmd_payload_bytes, literal_bits)
+                                //   4 * uint16  (literal_state[4])
+                                //   1 * uint32  (lmd_bits)
+                                //   3 * uint16  (l_state, m_state, d_state)
+                                //   freq tables (uint16 per symbol)
+                                const uint v1HeaderSize = 8 * sizeof(uint) + 4 * sizeof(ushort)
+                                                        + sizeof(uint) + 3 * sizeof(ushort)
+                                                        + sizeof(ushort) * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
+                                                                            Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
 
                                 if (s.SourcePosition + v1HeaderSize > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
@@ -282,7 +314,7 @@ public static class LzfseDecoder
                         SourcePosition = s.SourcePosition,
                         SourceEnd = s.SourceEnd,
                         DestinationPosition = s.DestinationPosition,
-                        DestinationStart = s.DestinationStart,
+                        DestinationStart = 0,
                         DestinationEnd = s.DestinationEnd,
                         PreviousDistance = (int)bs.PreviousDistance,
                         EndOfStream = false
@@ -311,6 +343,12 @@ public static class LzfseDecoder
                     bs.PayloadByteCount -= (uint)srcUsed;
                     bs.RawByteCount -= (uint)dstUsed;
                     bs.PreviousDistance = (uint)dstate.PreviousDistance;
+
+                    // LZVN detected an invalid match distance or other semantic error.
+                    // This must surface as Malformed, not DestinationFull (which is the
+                    // default classification for "decode stopped mid-block").
+                    if (dstate.Malformed)
+                        return Constants.StatusError;
 
                     // Test end of block - successful completion
                     if (bs.PayloadByteCount == 0 && bs.RawByteCount == 0 && dstate.EndOfStream)
@@ -342,7 +380,7 @@ public static class LzfseDecoder
         ref LzfseCompressedBlockHeaderV1 header1)
     {
         FseInStream inStream = default;
-        int bufStart = s.SourceStart;
+        const int bufStart = 0;
         int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
         int buf = literalPayloadEnd; // Read bits backwards from the end
 

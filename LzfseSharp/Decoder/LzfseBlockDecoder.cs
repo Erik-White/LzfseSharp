@@ -45,7 +45,7 @@ internal static class LzfseBlockDecoder
         ushort mState = blockState.MState;
         ushort dState = blockState.DState;
         FseInStream inStream = blockState.LmdInStream;
-        int sourceStart = state.SourceStart;
+        const int sourceStart = 0;
         int sourcePosition = state.SourcePosition + blockState.LmdInBuf;
         int literalPosition = blockState.CurrentLiteralPos;
         int destinationPosition = state.DestinationPosition;
@@ -145,9 +145,9 @@ internal static class LzfseBlockDecoder
         ref int matchDistance,
         ref long remainingBytes)
     {
-        // Validate match distance
-        if ((uint)matchDistance > destinationPosition + literalLength - state.DestinationStart)
-            return false; // Invalid distance
+        // Validate match distance: cannot reach before the start of the destination buffer.
+        if ((uint)matchDistance > destinationPosition + literalLength)
+            return false;
 
         const int SafetyMargin = 32;
         const int MinDistanceForFastCopy = 8;

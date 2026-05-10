@@ -1,5 +1,6 @@
 using System.Text;
 using AwesomeAssertions;
+using LzfseSharp.Core;
 using Xunit;
 
 namespace LzfseSharp.Tests;
@@ -99,5 +100,109 @@ public class LzfseDecoderTests
         int result = LzfseDecoder.Decompress(dst, src);
 
         result.Should().Be(0);
+    }
+
+    [Fact]
+    public void Decompress_LzvnSmallLiteralFollowedByUncompressedBlock_DoesNotCorruptOutput()
+    {
+        // Regression guard for the CopyLiteralBytes fast path: when L <= 3 and
+        // destinationLength >= 4, it stores 4 bytes and advances by L, leaving
+        // 4-L "overshoot" bytes in dst past the logical write position. The outer
+        // framer's DestinationEnd clamp should prevent those bytes from leaking
+        // into the logical output of a subsequent block. This test verifies that
+        // a small-literal LZVN block followed by an uncompressed block produces
+        // exactly the expected bytes, with no corruption from the overshoot.
+
+        // Block 1 (LZVN): small-literal opcode 0xe2 (L=2) + "AB" + 8-byte EOS
+        byte[] lzvnPayload = new byte[1 + 2 + 8];
+        lzvnPayload[0] = 0xe2;
+        lzvnPayload[1] = (byte)'A';
+        lzvnPayload[2] = (byte)'B';
+        lzvnPayload[3] = 0x06; // EOS opcode
+
+        byte[] stream = new byte[12 + lzvnPayload.Length + 8 + 2 + 4];
+        int p = 0;
+
+        MemoryOperations.Store4(stream.AsSpan(p), Constants.CompressedLzvnBlockMagic); p += 4;
+        MemoryOperations.Store4(stream.AsSpan(p), 2); p += 4;                            // raw = 2
+        MemoryOperations.Store4(stream.AsSpan(p), (uint)lzvnPayload.Length); p += 4;     // payload size
+        lzvnPayload.CopyTo(stream, p); p += lzvnPayload.Length;
+
+        // Block 2 (uncompressed): 2 bytes "YZ"
+        MemoryOperations.Store4(stream.AsSpan(p), Constants.UncompressedBlockMagic); p += 4;
+        MemoryOperations.Store4(stream.AsSpan(p), 2); p += 4;
+        stream[p++] = (byte)'Y';
+        stream[p++] = (byte)'Z';
+
+        // End of stream
+        MemoryOperations.Store4(stream.AsSpan(p), Constants.EndOfStreamBlockMagic);
+
+        byte[] dst = new byte[4];
+        int result = LzfseDecoder.Decompress(dst, stream);
+
+        result.Should().Be(4);
+        dst.Should().Equal((byte)'A', (byte)'B', (byte)'Y', (byte)'Z');
+    }
+
+    [Fact]
+    public void Decompress_V2BlockWithInflatedHeaderSize_ReportsMalformed()
+    {
+        // DecodeV2ToV1 reads the "header_size" field from packed_fields[2] bits 0..31.
+        // A crafted stream can set this arbitrarily; the decoder must reject it rather
+        // than run off the end of its input buffer. Before the guard, this caused an
+        // IndexOutOfRangeException in the freq-table refill loop.
+        byte[] stream = new byte[32 + 4];  // fixed V2 header + EOS magic, no freq data
+        MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 0); // n_raw_bytes = 0
+
+        // packed_fields[2] at offset 24; bits [0:31] = header_size = 1,000,000 (far beyond buffer).
+        ulong packedField2 = 1_000_000UL;
+        MemoryOperations.Store8(stream.AsSpan(24), packedField2);
+
+        MemoryOperations.Store4(stream.AsSpan(32), Constants.EndOfStreamBlockMagic);
+
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().Be(DecompressStatus.Malformed,
+            "a V2 header claiming more bytes than the stream provides must be reported as malformed, not crash");
+    }
+
+    [Fact]
+    public void Decompress_V2BlockWithUndersizedHeaderSize_ReportsMalformed()
+    {
+        // Inverse case: declaredHeaderSize < 32 (the fixed header size). Should reject
+        // up-front rather than enter the freq loop with sourcePosition (32) > sourceEnd.
+        byte[] stream = new byte[32 + 4];
+        MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 0);
+
+        ulong packedField2 = 16UL; // header_size = 16, less than FreqTablesOffset (32)
+        MemoryOperations.Store8(stream.AsSpan(24), packedField2);
+
+        MemoryOperations.Store4(stream.AsSpan(32), Constants.EndOfStreamBlockMagic);
+
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().Be(DecompressStatus.Malformed);
+    }
+
+    [Fact]
+    public void Decompress_LzvnBlockWithTruncatedEosMarker_ReportsNonOk()
+    {
+        // Build a bvxn block whose payload is just {0x06}. PayloadByteCount = 1,
+        // so the outer bounds check is satisfied, but the 8-byte EOS marker is truncated.
+        byte[] stream = new byte[12 + 1 + 4];
+        MemoryOperations.Store4(stream, Constants.CompressedLzvnBlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 8); // claim 8 raw bytes
+        MemoryOperations.Store4(stream.AsSpan(8), 1); // payload = 1 byte
+        stream[12] = 0x06; // truncated EOS
+        MemoryOperations.Store4(stream.AsSpan(13), Constants.EndOfStreamBlockMagic);
+
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().NotBe(DecompressStatus.Ok, "a truncated EOS marker is not a successful decode");
     }
 }

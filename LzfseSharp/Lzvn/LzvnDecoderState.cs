@@ -15,4 +15,11 @@ internal struct LzvnDecoderState
     public nuint MatchDistance;
     public int PreviousDistance;
     public bool EndOfStream;
+
+    /// <summary>
+    /// Set to true when <see cref="LzvnDecoder.Decode"/> detects a malformed stream
+    /// (invalid match distance, undefined opcode). Distinct from simply running out
+    /// of source or destination, which leaves this false.
+    /// </summary>
+    public bool Malformed;
 }

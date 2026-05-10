@@ -43,6 +43,42 @@ public class RoundTripTests
         AssertRoundTrip(original);
     }
 
+    [Theory]
+    [InlineData(500_000)]
+    [InlineData(1_000_000)]
+    [InlineData(4_000_000)]
+    public void TestLargeRepeatingData(int size)
+    {
+        // Exercises multi-block transitions at scale: the reference encoder packs
+        // ~40 KB per LZFSE block, so 4 MB forces ~100 block-boundary traversals.
+        byte[] original = new byte[size];
+        for (int i = 0; i < original.Length; i++)
+            original[i] = (byte)(i % 251);
+
+        AssertRoundTrip(original);
+    }
+
+    [Theory]
+    [InlineData(500_000)]
+    [InlineData(1_000_000)]
+    public void TestLargeMixedData(int size)
+    {
+        // Mix of repeating patterns, sparse randomness, and runs — forces the encoder
+        // to pick different block types for different segments, stressing the outer
+        // bvxn / bvx2 / bvx- transitions in LzfseDecoder.DecodeInternal.
+        byte[] original = new byte[size];
+        Random random = new Random(7);
+        for (int i = 0; i < size; i++)
+        {
+            if (i % 1024 < 256) original[i] = (byte)(i & 0xff);          // linear run
+            else if (i % 1024 < 512) original[i] = 0x5A;                  // constant run
+            else if (i % 1024 < 768) original[i] = (byte)random.Next(256);// random bytes
+            else original[i] = (byte)('A' + (i % 26));                    // text-like
+        }
+
+        AssertRoundTrip(original);
+    }
+
     [Fact]
     public void TestRandomData()
     {

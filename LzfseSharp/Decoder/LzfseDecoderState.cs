@@ -5,14 +5,12 @@ namespace LzfseSharp.Decoder;
 /// </summary>
 internal ref struct LzfseDecoderState
 {
-    // Source buffer pointers
+    // An offset into <see cref="SourceBuffer"/>
     public int SourcePosition;
-    public int SourceStart;
     public int SourceEnd;
 
-    // Destination buffer pointers
+    // An offset into <see cref="DestinationBuffer"/>
     public int DestinationPosition;
-    public int DestinationStart;
     public int DestinationEnd;
 
     // Stream state

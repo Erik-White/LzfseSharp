@@ -108,6 +108,15 @@ internal static class BlockHeaderDecoder
 
         int sourcePosition = FreqTablesOffset;
         uint declaredHeaderSize = BitOperations.GetField(packedField2, 0, 32);
+
+        // The declared header size is untrusted — it must cover at least the fixed
+        // header (FreqTablesOffset bytes) and must not extend past the bytes actually
+        // supplied to us. Without this check a crafted stream with an inflated
+        // declaredHeaderSize causes an IndexOutOfRangeException in the freq loop
+        // below rather than a clean decode error.
+        if (declaredHeaderSize < FreqTablesOffset || declaredHeaderSize > (uint)inBytes.Length)
+            return new V2ToV1DecodeResult(outHeader, 0, -1);
+
         int sourceEnd = (int)declaredHeaderSize;
 
         int totalSymbols = Constants.EncodeLSymbols + Constants.EncodeMSymbols +
@@ -213,6 +222,15 @@ internal static class BlockHeaderDecoder
 
         if (Fse.FseDecoder.CheckFreq(header.LiteralFreq, Constants.EncodeLiteralSymbols, Constants.EncodeLiteralStates) != 0)
             validationErrors |= 1 << 13;
+
+        // NLiterals must be a multiple of 4: the literal decoder reads 4 at a time.
+        if ((header.NLiterals & 3) != 0)
+            validationErrors |= 1 << 14;
+
+        // NPayloadBytes is redundant in the stream (NLiteralPayloadBytes + NLmdPayloadBytes),
+        // but when supplied it must agree with the two component fields.
+        if (header.NPayloadBytes != header.NLiteralPayloadBytes + header.NLmdPayloadBytes)
+            validationErrors |= 1 << 15;
 
         return validationErrors != 0 ? (validationErrors | ErrorFlag) : 0;
     }
