@@ -187,7 +187,7 @@ public class V1BlockTests
 
                 case Constants.CompressedV2BlockMagic:
                 {
-                    BlockHeaderDecoder.V2ToV1DecodeResult decoded = BlockHeaderDecoder.DecodeV2ToV1(v2Stream[pos..]);
+                    BlockHeaderParser.V2ToV1DecodeResult decoded = BlockHeaderParser.DecodeV2ToV1(v2Stream[pos..]);
                     decoded.Status.Should().Be(0);
                     LzfseCompressedBlockHeaderV1 h = decoded.Header;
                     if (!mutated)
@@ -246,7 +246,7 @@ public class V1BlockTests
 
                 case Constants.CompressedV2BlockMagic:
                 {
-                    BlockHeaderDecoder.V2ToV1DecodeResult decoded = BlockHeaderDecoder.DecodeV2ToV1(v2Stream[pos..]);
+                    BlockHeaderParser.V2ToV1DecodeResult decoded = BlockHeaderParser.DecodeV2ToV1(v2Stream[pos..]);
                     decoded.Status.Should().Be(0);
 
                     output.Write(EncodeV1Header(decoded.Header));

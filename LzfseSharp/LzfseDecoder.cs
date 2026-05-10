@@ -1,4 +1,3 @@
-using LzfseSharp.Core;
 using LzfseSharp.Decoder;
 using LzfseSharp.Fse;
 using LzfseSharp.Lzvn;
@@ -118,7 +117,7 @@ public static class LzfseDecoder
     /// raw-byte counts to determine the exact decompressed size. Does not decode any
     /// payload. Intended as a fast pre-pass for the allocating overload.
     /// </summary>
-    /// <exception cref="InvalidDataException">The stream is truncated or has an invalid magic.</exception>
+    /// <exception cref="InvalidDataException">The stream is truncated, has an invalid magic, or a malformed V2 header.</exception>
     private static int ScanDecompressedSize(ReadOnlySpan<byte> srcBuffer)
     {
         long total = 0;
@@ -126,12 +125,9 @@ public static class LzfseDecoder
 
         while (true)
         {
-            if (pos + 4 > srcBuffer.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: missing block magic.");
+            var layout = BlockHeaderParser.ReadBlockLayout(srcBuffer, pos);
 
-            uint magic = MemoryOperations.Load4(srcBuffer[pos..]);
-
-            if (magic == Constants.EndOfStreamBlockMagic)
+            if (layout.Magic == Constants.EndOfStreamBlockMagic)
             {
                 if (total > int.MaxValue)
                     throw new InvalidDataException(
@@ -139,57 +135,11 @@ public static class LzfseDecoder
                 return (int)total;
             }
 
-            // Every remaining block type begins with { magic(4), n_raw_bytes(4), ... }.
-            // We need at least those 8 bytes before reading further.
-            if (pos + 8 > srcBuffer.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete block header.");
-            uint rawBytes = MemoryOperations.Load4(srcBuffer[(pos + 4)..]);
-
-            long blockLength = magic switch
-            {
-                Constants.UncompressedBlockMagic => Constants.UncompressedBlockHeaderSize + rawBytes,
-                Constants.CompressedLzvnBlockMagic => LzvnBlockLength(srcBuffer, pos),
-                Constants.CompressedV1BlockMagic => V1BlockLength(srcBuffer, pos),
-                Constants.CompressedV2BlockMagic => V2BlockLength(srcBuffer, pos),
-                _ => throw new InvalidDataException($"LZFSE stream has invalid block magic 0x{magic:X8}.")
-            };
-
-            total += rawBytes;
-            long next = (long)pos + blockLength;
+            total += layout.RawBytes;
+            long next = (long)pos + layout.BlockLength;
             if (next > srcBuffer.Length)
                 throw new InvalidDataException("LZFSE stream is truncated: block payload is short.");
             pos = (int)next;
-        }
-
-        static long LzvnBlockLength(ReadOnlySpan<byte> src, int pos)
-        {
-            if (pos + Constants.LzvnCompressedBlockHeaderSize > src.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete LZVN block header.");
-            uint payloadBytes = MemoryOperations.Load4(src[(pos + 8)..]);
-            return Constants.LzvnCompressedBlockHeaderSize + payloadBytes;
-        }
-
-        static long V1BlockLength(ReadOnlySpan<byte> src, int pos)
-        {
-            if (pos + Constants.V1HeaderSize > src.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete V1 block header.");
-            uint nLiteralPayload = MemoryOperations.Load4(src[(pos + 20)..]);
-            uint nLmdPayload = MemoryOperations.Load4(src[(pos + 24)..]);
-            return (long)Constants.V1HeaderSize + nLiteralPayload + nLmdPayload;
-        }
-
-        static long V2BlockLength(ReadOnlySpan<byte> src, int pos)
-        {
-            if (pos + Constants.V2FixedHeaderSize > src.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete V2 block header.");
-
-            // Reuse the real header decoder so we apply the same validation (declared
-            // header size bounds, freq-table bit stream) that DecodeInternal will.
-            var result = BlockHeaderDecoder.DecodeV2ToV1(src[pos..]);
-            if (result.Status != 0)
-                throw new InvalidDataException("LZFSE V2 block header is malformed.");
-
-            return (long)result.HeaderSize + result.Header.NLiteralPayloadBytes + result.Header.NLmdPayloadBytes;
         }
     }
 
@@ -209,7 +159,7 @@ public static class LzfseDecoder
                     if (s.SourcePosition + 4 > s.SourceEnd)
                         return Constants.StatusSrcEmpty; // Source truncated
 
-                    uint magic = MemoryOperations.Load4(s.SourceBuffer[s.SourcePosition..]);
+                    uint magic = BlockHeaderParser.ReadMagic(s.SourceBuffer[s.SourcePosition..]);
 
                     switch (magic)
                     {
@@ -221,13 +171,11 @@ public static class LzfseDecoder
 
                         case Constants.UncompressedBlockMagic:
                         {
-                            // Uncompressed block
                             if (s.SourcePosition + Constants.UncompressedBlockHeaderSize > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
-                            // Setup state for uncompressed block
                             ref UncompressedBlockDecoderState bs = ref s.UncompressedBlockState;
-                            bs.RawByteCount = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
+                            bs.RawByteCount = BlockHeaderParser.ReadUncompressedRawBytes(s.SourceBuffer[s.SourcePosition..]);
                             s.SourcePosition += Constants.UncompressedBlockHeaderSize;
                             s.BlockMagic = magic;
                             break;
@@ -235,14 +183,11 @@ public static class LzfseDecoder
 
                         case Constants.CompressedLzvnBlockMagic:
                         {
-                            // LZVN compressed block
                             if (s.SourcePosition + Constants.LzvnCompressedBlockHeaderSize > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
-                            // Setup state for compressed LZVN block
                             ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
-                            bs.RawByteCount = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 4)..]);
-                            bs.PayloadByteCount = MemoryOperations.Load4(s.SourceBuffer[(s.SourcePosition + 8)..]);
+                            (bs.RawByteCount, bs.PayloadByteCount) = BlockHeaderParser.ReadLzvnHeader(s.SourceBuffer[s.SourcePosition..]);
                             bs.PreviousDistance = 0;
                             s.SourcePosition += Constants.LzvnCompressedBlockHeaderSize;
                             s.BlockMagic = magic;
@@ -256,7 +201,6 @@ public static class LzfseDecoder
                             LzfseCompressedBlockHeaderV1 header1;
                             uint headerSize;
 
-                            // Decode compressed headers
                             if (magic == Constants.CompressedV2BlockMagic)
                             {
                                 // DecodeV2ToV1 loads packed_fields[2] at offset 24..31, so the fixed-header
@@ -265,8 +209,7 @@ public static class LzfseDecoder
                                 if (s.SourcePosition + Constants.V2FixedHeaderSize > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
 
-                                // Decode V2 header - this determines actual header size during parsing
-                                var decodeResult = BlockHeaderDecoder.DecodeV2ToV1(s.SourceBuffer[s.SourcePosition..]);
+                                var decodeResult = BlockHeaderParser.DecodeV2ToV1(s.SourceBuffer[s.SourcePosition..]);
                                 if (decodeResult.Status != 0)
                                     return Constants.StatusError; // Failed
 
@@ -278,7 +221,7 @@ public static class LzfseDecoder
                                 if (s.SourcePosition + Constants.V1HeaderSize > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
 
-                                header1 = DecodeV1Header(s.SourceBuffer[s.SourcePosition..]);
+                                header1 = BlockHeaderParser.DecodeV1(s.SourceBuffer[s.SourcePosition..]);
                                 headerSize = (uint)Constants.V1HeaderSize;
                             }
 
@@ -288,7 +231,7 @@ public static class LzfseDecoder
                                 return Constants.StatusSrcEmpty; // Need all encoded block
 
                             // Sanity checks
-                            if (BlockHeaderDecoder.CheckBlockHeaderV1(ref header1) != 0)
+                            if (BlockHeaderParser.CheckBlockHeaderV1(ref header1) != 0)
                                 return Constants.StatusError;
 
                             // Skip header
@@ -544,51 +487,5 @@ public static class LzfseDecoder
         bs.DValue = -1;
         bs.LmdInStream = inStream;
         return 0;
-    }
-
-    /// <summary>
-    /// Decode V1 block header from buffer.
-    /// </summary>
-    private static LzfseCompressedBlockHeaderV1 DecodeV1Header(ReadOnlySpan<byte> buffer)
-    {
-        var header = new LzfseCompressedBlockHeaderV1
-        {
-            Magic = MemoryOperations.Load4(buffer),
-            NRawBytes = MemoryOperations.Load4(buffer[4..]),
-            NPayloadBytes = MemoryOperations.Load4(buffer[8..]),
-            NLiterals = MemoryOperations.Load4(buffer[12..]),
-            NMatches = MemoryOperations.Load4(buffer[16..]),
-            NLiteralPayloadBytes = MemoryOperations.Load4(buffer[20..]),
-            NLmdPayloadBytes = MemoryOperations.Load4(buffer[24..]),
-            LiteralBits = (int)MemoryOperations.Load4(buffer[28..]),
-            LmdBits = (int)MemoryOperations.Load4(buffer[40..])
-        };
-
-        // Decode literal states
-        header.LiteralState[0] = MemoryOperations.Load2(buffer[32..]);
-        header.LiteralState[1] = MemoryOperations.Load2(buffer[34..]);
-        header.LiteralState[2] = MemoryOperations.Load2(buffer[36..]);
-        header.LiteralState[3] = MemoryOperations.Load2(buffer[38..]);
-
-        // Decode L, M, D states
-        header.LState = MemoryOperations.Load2(buffer[44..]);
-        header.MState = MemoryOperations.Load2(buffer[46..]);
-        header.DState = MemoryOperations.Load2(buffer[48..]);
-
-        // Decode frequency tables
-        int offset = 50;
-        for (int i = 0; i < Constants.EncodeLSymbols; i++, offset += 2)
-            header.LFreq[i] = MemoryOperations.Load2(buffer[offset..]);
-
-        for (int i = 0; i < Constants.EncodeMSymbols; i++, offset += 2)
-            header.MFreq[i] = MemoryOperations.Load2(buffer[offset..]);
-
-        for (int i = 0; i < Constants.EncodeDSymbols; i++, offset += 2)
-            header.DFreq[i] = MemoryOperations.Load2(buffer[offset..]);
-
-        for (int i = 0; i < Constants.EncodeLiteralSymbols; i++, offset += 2)
-            header.LiteralFreq[i] = MemoryOperations.Load2(buffer[offset..]);
-
-        return header;
     }
 }
