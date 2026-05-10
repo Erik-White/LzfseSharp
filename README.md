@@ -26,28 +26,39 @@ dotnet add package LzfseSharp
 ```csharp
 using LzfseSharp;
 
-// Read compressed data
 byte[] compressedData = File.ReadAllBytes("data.lzfse");
 
-// Allocate buffer for decompressed output
-// You need to know the uncompressed size beforehand
-byte[] decompressedData = new byte[uncompressedSize];
+// Allocate a buffer at least as large as the expected uncompressed size.
+// Over-allocating is fine — the decoder reports the actual bytes written.
+byte[] decompressedData = new byte[expectedSize];
 
-// Decompress
 int bytesWritten = LzfseDecoder.Decompress(
     decompressedData,
-    compressedData
-);
+    compressedData,
+    out DecompressStatus status);
 
-if (bytesWritten == 0)
+switch (status)
 {
-    Console.WriteLine("Decompression failed!");
-}
-else
-{
-    Console.WriteLine($"Decompressed {bytesWritten} bytes");
+    case DecompressStatus.Ok:
+        Console.WriteLine($"Decompressed {bytesWritten} bytes");
+        break;
+    case DecompressStatus.SourceTruncated:
+        Console.WriteLine($"Input was truncated; {bytesWritten} bytes recovered");
+        break;
+    case DecompressStatus.DestinationFull:
+        Console.WriteLine("Destination buffer was too small");
+        break;
+    case DecompressStatus.Malformed:
+        Console.WriteLine("Input stream is not valid LZFSE");
+        break;
 }
 ```
+
+There is also a simpler overload without the `out DecompressStatus` parameter
+that returns the bytes written and throws `ArgumentException` when the
+destination is too small. Prefer the `DecompressStatus` overload when you need
+to distinguish truncated input from malformed input, or when partial output on
+failure is useful.
 
 ### Working with Streams
 
@@ -57,16 +68,16 @@ using LzfseSharp;
 using var inputStream = File.OpenRead("data.lzfse");
 using var outputStream = File.OpenWrite("data.bin");
 
-// Read compressed data
 byte[] compressed = new byte[inputStream.Length];
-inputStream.Read(compressed, 0, compressed.Length);
+inputStream.ReadExactly(compressed);
 
-// Decompress
-byte[] decompressed = new byte[uncompressedSize];
-int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+byte[] decompressed = new byte[expectedSize];
+int bytesWritten = LzfseDecoder.Decompress(
+    decompressed,
+    compressed,
+    out DecompressStatus status);
 
-// Write decompressed data
-if (bytesWritten > 0)
+if (status == DecompressStatus.Ok)
 {
     outputStream.Write(decompressed, 0, bytesWritten);
 }
@@ -89,8 +100,8 @@ The decoder automatically detects and handles all block types.
 ## Limitations
 
 - **Decode-only**: This library only supports decompression. For compression, use the original C library or platform-specific APIs on Apple platforms.
-- **No streaming API**: Currently requires the entire compressed data in memory. Streaming support may be added in future versions.
-- **Buffer size**: You must allocate the output buffer with the correct uncompressed size beforehand.
+- **No streaming API**: Currently requires the entire compressed data in memory. Decompression cannot be resumed across multiple calls — if the destination buffer is too small the decoder returns `DecompressStatus.DestinationFull` and the caller must retry from the start with a larger buffer.
+- **Buffer size**: The destination buffer must be large enough to hold the full uncompressed output. Over-allocating is safe; the decoder reports the actual byte count.
 
 ## License
 
