@@ -353,7 +353,6 @@ internal static class LzvnDecoder
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static OpcodeDecodeResult DecodeOpcode(byte opcode, ReadOnlySpan<byte> source, int sourcePointer, int sourceLength)
     {
         // Classify opcode
