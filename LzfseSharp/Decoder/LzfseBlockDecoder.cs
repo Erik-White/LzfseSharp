@@ -76,7 +76,7 @@ internal static class LzfseBlockDecoder
 
             literalLength = FseDecoder.ValueDecode(ref lState, blockState.LDecoder, ref inStream);
 
-            if (literalPosition + literalLength >= blockState.Literals.Length)
+            if (literalPosition + literalLength >= LzfseCompressedBlockDecoderState.LiteralsBufferLength)
                 return Constants.StatusError;
 
             flushResult = inStream.Flush(sourcePosition, sourceStart, state.SourceBuffer);
