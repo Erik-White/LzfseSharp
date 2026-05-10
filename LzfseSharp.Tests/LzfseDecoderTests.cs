@@ -302,6 +302,24 @@ public class LzfseDecoderTests
     }
 
     [Fact]
+    public void DecompressAllocating_DeclaredSizeExceedsInt32_Throws()
+    {
+        // LZVN block header claims 2^31 raw bytes; scan must reject before attempting
+        // to allocate a negative-sized (or wrap-around) byte[]. Payload is a short
+        // filler — scan never reads it, it just walks past the declared payload length.
+        byte[] stream = new byte[12 + 4 + 4];
+        MemoryOperations.Store4(stream, Constants.CompressedLzvnBlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 0x80000000u);    // n_raw_bytes = 2^31
+        MemoryOperations.Store4(stream.AsSpan(8), 4);              // payload_bytes = 4
+        // 4 bytes of payload filler (contents don't matter — scan skips them)
+        MemoryOperations.Store4(stream.AsSpan(16), Constants.EndOfStreamBlockMagic);
+
+        Action act = () => LzfseDecoder.Decompress(stream);
+
+        act.Should().Throw<System.IO.InvalidDataException>();
+    }
+
+    [Fact]
     public void DecompressAllocating_V2HeaderWithInflatedSize_Throws()
     {
         byte[] src = new byte[32 + 4];
