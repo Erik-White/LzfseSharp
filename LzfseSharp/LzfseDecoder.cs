@@ -1,3 +1,4 @@
+using System.IO;
 using LzfseSharp.Core;
 using LzfseSharp.Decoder;
 using LzfseSharp.Fse;
@@ -10,6 +11,41 @@ namespace LzfseSharp;
 /// </summary>
 public static class LzfseDecoder
 {
+    /// <summary>
+    /// Decompresses LZFSE-compressed data and returns a correctly sized buffer of the decoded output.
+    /// </summary>
+    /// <param name="srcBuffer">Source buffer containing compressed data.</param>
+    /// <returns>
+    /// A newly allocated array whose length equals the decompressed size declared by the stream.
+    /// Returns an empty array when the stream contains only an end-of-stream marker.
+    /// </returns>
+    /// <exception cref="InvalidDataException">The stream is truncated or malformed.</exception>
+    /// <remarks>
+    /// The decoder pre-scans the block headers to determine the exact decompressed size, then
+    /// performs a single decode pass into an exact-fit buffer.
+    /// </remarks>
+    public static byte[] Decompress(ReadOnlySpan<byte> srcBuffer)
+    {
+        int size = ScanDecompressedSize(srcBuffer);
+        if (size == 0)
+            return [];
+
+        byte[] result = new byte[size];
+        int written = Decompress(result, srcBuffer, out DecompressStatus status);
+
+        if (status != DecompressStatus.Ok)
+            throw new InvalidDataException($"LZFSE decode failed with status {status}.");
+
+        // The pre-scan summed the declared n_raw_bytes across blocks; a successful decode
+        // must produce exactly that many bytes. A mismatch means scan and decode disagree
+        // on the stream contents, which should not be possible for a well-formed stream.
+        if (written != size)
+            throw new InvalidDataException(
+                $"LZFSE decode produced {written} bytes but the stream headers declared {size}.");
+
+        return result;
+    }
+
     /// <summary>
     /// Decompresses LZFSE-compressed data from source buffer to destination buffer.
     /// </summary>
@@ -76,6 +112,116 @@ public static class LzfseDecoder
         // status is DestinationFull (caller can grow the buffer and retry) or when
         // the stream turned out to be malformed mid-way through a multi-block stream.
         return state.DestinationPosition;
+    }
+
+    /// <summary>
+    /// Walks the block headers in <paramref name="srcBuffer"/> and sums the declared
+    /// raw-byte counts to determine the exact decompressed size. Does not decode any
+    /// payload. Intended as a fast pre-pass for the allocating overload.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The stream is truncated or has an invalid magic.</exception>
+    private static int ScanDecompressedSize(ReadOnlySpan<byte> srcBuffer)
+    {
+        long total = 0;
+        int pos = 0;
+
+        while (true)
+        {
+            if (pos + 4 > srcBuffer.Length)
+                throw new InvalidDataException("LZFSE stream is truncated: missing block magic.");
+
+            uint magic = MemoryOperations.Load4(srcBuffer[pos..]);
+
+            switch (magic)
+            {
+                case Constants.EndOfStreamBlockMagic:
+                    if (total > int.MaxValue)
+                        throw new InvalidDataException(
+                            $"LZFSE stream declares {total} decompressed bytes, which exceeds int.MaxValue.");
+                    return (int)total;
+
+                case Constants.UncompressedBlockMagic:
+                {
+                    if (pos + 8 > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: incomplete uncompressed block header.");
+                    uint rawBytes = MemoryOperations.Load4(srcBuffer[(pos + 4)..]);
+                    total += rawBytes;
+                    // Header (8) + payload (rawBytes)
+                    long next = (long)pos + 8 + rawBytes;
+                    if (next > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: uncompressed block payload is short.");
+                    pos = (int)next;
+                    break;
+                }
+
+                case Constants.CompressedLzvnBlockMagic:
+                {
+                    if (pos + 12 > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: incomplete LZVN block header.");
+                    uint rawBytes = MemoryOperations.Load4(srcBuffer[(pos + 4)..]);
+                    uint payloadBytes = MemoryOperations.Load4(srcBuffer[(pos + 8)..]);
+                    total += rawBytes;
+                    long next = (long)pos + 12 + payloadBytes;
+                    if (next > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: LZVN block payload is short.");
+                    pos = (int)next;
+                    break;
+                }
+
+                case Constants.CompressedV1BlockMagic:
+                {
+                    // V1 fixed-size header. Payload size = NLiteralPayloadBytes + NLmdPayloadBytes.
+                    const int v1HeaderSize = 8 * sizeof(uint) + 4 * sizeof(ushort)
+                                           + sizeof(uint) + 3 * sizeof(ushort)
+                                           + sizeof(ushort) * (Constants.EncodeLSymbols + Constants.EncodeMSymbols +
+                                                               Constants.EncodeDSymbols + Constants.EncodeLiteralSymbols);
+                    if (pos + v1HeaderSize > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: incomplete V1 block header.");
+
+                    uint rawBytes = MemoryOperations.Load4(srcBuffer[(pos + 4)..]);
+                    uint nLiteralPayload = MemoryOperations.Load4(srcBuffer[(pos + 20)..]);
+                    uint nLmdPayload = MemoryOperations.Load4(srcBuffer[(pos + 24)..]);
+                    total += rawBytes;
+                    long next = (long)pos + v1HeaderSize + nLiteralPayload + nLmdPayload;
+                    if (next > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: V1 block payload is short.");
+                    pos = (int)next;
+                    break;
+                }
+
+                case Constants.CompressedV2BlockMagic:
+                {
+                    // Fixed V2 header is 32 bytes; packed_fields[2] at offset 24 carries
+                    // both the declared header size (bits 0..31) and encoded metadata we
+                    // need (n_literal_payload and n_lmd_payload are packed into fields 0/1).
+                    const int v2FixedHeaderSize = 32;
+                    if (pos + v2FixedHeaderSize > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: incomplete V2 block header.");
+
+                    uint rawBytes = MemoryOperations.Load4(srcBuffer[(pos + 4)..]);
+                    ulong packedField0 = MemoryOperations.Load8(srcBuffer[(pos + 8)..]);
+                    ulong packedField1 = MemoryOperations.Load8(srcBuffer[(pos + 16)..]);
+                    ulong packedField2 = MemoryOperations.Load8(srcBuffer[(pos + 24)..]);
+
+                    uint nLiteralPayload = BitOperations.GetField(packedField0, 20, 20);
+                    uint nLmdPayload = BitOperations.GetField(packedField1, 40, 20);
+                    uint declaredHeaderSize = BitOperations.GetField(packedField2, 0, 32);
+
+                    if (declaredHeaderSize < v2FixedHeaderSize)
+                        throw new InvalidDataException("LZFSE V2 block header declares an undersized header.");
+
+                    total += rawBytes;
+                    long next = (long)pos + declaredHeaderSize + nLiteralPayload + nLmdPayload;
+                    if (next > srcBuffer.Length)
+                        throw new InvalidDataException("LZFSE stream is truncated: V2 block payload is short.");
+                    pos = (int)next;
+                    break;
+                }
+
+                default:
+                    throw new InvalidDataException($"LZFSE stream has invalid block magic 0x{magic:X8}.");
+            }
+        }
     }
 
     /// <summary>

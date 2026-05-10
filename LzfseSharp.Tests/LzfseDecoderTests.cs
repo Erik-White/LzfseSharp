@@ -208,6 +208,133 @@ public class LzfseDecoderTests
     }
 
     [Fact]
+    public void DecompressAllocating_EndOfStreamOnly_ReturnsEmptyArray()
+    {
+        ReadOnlySpan<byte> src = [0x62, 0x76, 0x78, 0x24];
+
+        byte[] result = LzfseDecoder.Decompress(src);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DecompressAllocating_UncompressedBlock_ReturnsExactSizeArray()
+    {
+        byte[] src = [
+            0x62, 0x76, 0x78, 0x2d,              // bvx-
+            0x05, 0x00, 0x00, 0x00,              // n_raw_bytes: 5
+            0x48, 0x65, 0x6c, 0x6c, 0x6f,        // "Hello"
+            0x62, 0x76, 0x78, 0x24               // EOS
+        ];
+
+        byte[] result = LzfseDecoder.Decompress(src);
+
+        result.Should().HaveCount(5);
+        Encoding.ASCII.GetString(result).Should().Be("Hello");
+    }
+
+    [Fact]
+    public void DecompressAllocating_MultipleUncompressedBlocks_ConcatenatesRawBytes()
+    {
+        byte[] src = [
+            0x62, 0x76, 0x78, 0x2d, 0x03, 0x00, 0x00, 0x00, (byte)'A', (byte)'B', (byte)'C',
+            0x62, 0x76, 0x78, 0x2d, 0x02, 0x00, 0x00, 0x00, (byte)'D', (byte)'E',
+            0x62, 0x76, 0x78, 0x24
+        ];
+
+        byte[] result = LzfseDecoder.Decompress(src);
+
+        Encoding.ASCII.GetString(result).Should().Be("ABCDE");
+    }
+
+    [Fact]
+    public void DecompressAllocating_EmptyInput_Throws()
+    {
+        ReadOnlySpan<byte> src = [];
+
+        try
+        {
+            _ = LzfseDecoder.Decompress(src);
+            Assert.Fail("Expected InvalidDataException");
+        }
+        catch (System.IO.InvalidDataException)
+        {
+        }
+    }
+
+    [Fact]
+    public void DecompressAllocating_InvalidMagic_Throws()
+    {
+        byte[] src = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
+
+        Action act = () => LzfseDecoder.Decompress(src);
+
+        act.Should().Throw<System.IO.InvalidDataException>();
+    }
+
+    [Fact]
+    public void DecompressAllocating_TruncatedUncompressedPayload_Throws()
+    {
+        byte[] src = [
+            0x62, 0x76, 0x78, 0x2d,
+            0x05, 0x00, 0x00, 0x00,
+            0x48, 0x65                           // only 2 of the 5 declared bytes
+        ];
+
+        Action act = () => LzfseDecoder.Decompress(src);
+
+        act.Should().Throw<System.IO.InvalidDataException>();
+    }
+
+    [Fact]
+    public void DecompressAllocating_MissingEndOfStream_Throws()
+    {
+        byte[] src = [
+            0x62, 0x76, 0x78, 0x2d,
+            0x05, 0x00, 0x00, 0x00,
+            0x48, 0x65, 0x6c, 0x6c, 0x6f
+            // no EOS block
+        ];
+
+        Action act = () => LzfseDecoder.Decompress(src);
+
+        act.Should().Throw<System.IO.InvalidDataException>();
+    }
+
+    [Fact]
+    public void DecompressAllocating_V2HeaderWithInflatedSize_Throws()
+    {
+        byte[] src = new byte[32 + 4];
+        MemoryOperations.Store4(src, Constants.CompressedV2BlockMagic);
+        ulong packedField2 = 1_000_000UL;   // header_size far past stream end
+        MemoryOperations.Store8(src.AsSpan(24), packedField2);
+        MemoryOperations.Store4(src.AsSpan(32), Constants.EndOfStreamBlockMagic);
+
+        Action act = () => LzfseDecoder.Decompress(src);
+
+        act.Should().Throw<System.IO.InvalidDataException>();
+    }
+
+    [Fact]
+    public void DecompressAllocating_RoundTripMatchesBufferOverload()
+    {
+        byte[] stream = [
+            0x62, 0x76, 0x78, 0x2d, 0x05, 0x00, 0x00, 0x00,
+            0x48, 0x65, 0x6c, 0x6c, 0x6f,
+            0x62, 0x76, 0x78, 0x24
+        ];
+
+        byte[] viaAllocating = LzfseDecoder.Decompress(stream);
+
+        byte[] viaBuffer = new byte[viaAllocating.Length];
+        int written = LzfseDecoder.Decompress(viaBuffer, stream, out DecompressStatus status);
+
+        status.Should().Be(DecompressStatus.Ok);
+        written.Should().Be(viaAllocating.Length);
+        viaBuffer.Should().Equal(viaAllocating);
+    }
+
+    [Fact]
     public void Decompress_LzvnBlockWithTruncatedEosMarker_ReportsNonOk()
     {
         // Build a bvxn block whose payload is just {0x06}. PayloadByteCount = 1,
