@@ -344,6 +344,12 @@ public static class LzfseDecoder
                     bs.RawByteCount -= (uint)dstUsed;
                     bs.PreviousDistance = (uint)dstate.PreviousDistance;
 
+                    // LZVN detected an invalid match distance or other semantic error.
+                    // This must surface as Malformed, not DestinationFull (which is the
+                    // default classification for "decode stopped mid-block").
+                    if (dstate.Malformed)
+                        return Constants.StatusError;
+
                     // Test end of block - successful completion
                     if (bs.PayloadByteCount == 0 && bs.RawByteCount == 0 && dstate.EndOfStream)
                     {

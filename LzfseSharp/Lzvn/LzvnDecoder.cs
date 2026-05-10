@@ -148,9 +148,16 @@ internal static class LzvnDecoder
             return false;
         }
 
-        // Validate match distance against output written so far.
-        if (D > (nuint)(destinationPosition - state.DestinationStart) || D == 0)
+        // Validate match distance against output written so far. D must be >= 1 (zero
+        // would mean "same position", which is not a well-formed match) and must not
+        // reach before DestinationStart.
+        if (D == 0 || D > (nuint)(destinationPosition - state.DestinationStart))
+        {
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.Malformed = true;
             return false;
+        }
 
         if (!CopyMatchBytes(dst, ref destinationPosition, ref M, D, ref destinationLength))
         {
@@ -207,6 +214,18 @@ internal static class LzvnDecoder
     {
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
+
+        // Match-only opcodes (sml_m, lrg_m, pre_d) reuse the previous distance.
+        // If no prior opcode set one, D is 0 (the initial PreviousDistance), and
+        // using it would read uninitialised bytes. Without this guard a crafted
+        // stream could also throw ArgumentOutOfRangeException from CopyMatchBytes.
+        if (D == 0 || D > (nuint)(destinationPosition - state.DestinationStart))
+        {
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.Malformed = true;
+            return false;
+        }
 
         if (!CopyMatchBytes(destination, ref destinationPosition, ref M, D, ref destinationLength))
         {

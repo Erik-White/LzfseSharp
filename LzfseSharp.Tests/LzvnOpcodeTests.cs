@@ -315,6 +315,129 @@ public class LzvnOpcodeTests
         state.EndOfStream.Should().BeFalse($"undefined opcode 0x{undefinedOpcode:X2} must not complete as end-of-stream");
     }
 
+    [Fact]
+    public void FirstMatchOpcodeWithNoPriorDistance_IsReportedAsMalformed()
+    {
+        // sml_m / lrg_m / pre_d reuse the "previous distance". When they're the FIRST
+        // opcode in an LZVN block, prev_D is zero and the match would read uninitialised
+        // bytes. The decoder must reject this as malformed, not silently splat zeros.
+        byte[] payload = Build(bytes =>
+        {
+            bytes.Add(0xf4); // sml_m, M=4, reuses (nonexistent) prev_D
+            AppendEos(bytes);
+        });
+
+        byte[] dst = new byte[16];
+        LzvnDecoderState state = new()
+        {
+            SourcePosition = 0,
+            SourceEnd = payload.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = dst.Length,
+        };
+        LzvnDecoder.Decode(ref state, payload, dst);
+
+        state.Malformed.Should().BeTrue("match with D=0 (no prior distance) is malformed");
+        state.EndOfStream.Should().BeFalse();
+    }
+
+    [Fact]
+    public void MatchOnlyDistanceBeyondOutputStart_IsReportedAsMalformed()
+    {
+        // Literal "AB" (via sml_l, 2 bytes). Then a standalone sml_d with L=0, M=3, D=8.
+        // D=8 reaches before DestinationStart — routed via ProcessMatch (L=0 path).
+        byte[] payload = Build(bytes =>
+        {
+            bytes.Add(0xe2);
+            bytes.Add((byte)'A');
+            bytes.Add((byte)'B');
+            bytes.Add(0x00); // sml_d: L=0, M=3, D high=0
+            bytes.Add(8);    // D low
+            AppendEos(bytes);
+        });
+
+        byte[] dst = new byte[16];
+        LzvnDecoderState state = new()
+        {
+            SourcePosition = 0,
+            SourceEnd = payload.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = dst.Length,
+        };
+        LzvnDecoder.Decode(ref state, payload, dst);
+
+        state.Malformed.Should().BeTrue("ProcessMatch must reject D=8 when only 2 bytes are written");
+    }
+
+    [Fact]
+    public void LiteralAndMatchDistanceBeyondOutputStart_IsReportedAsMalformed()
+    {
+        // First a sml_l to give the block 1 written byte, then a sml_d with L=2, M=3, D=8.
+        // L>0 AND M>0 routes to ProcessLiteralAndMatch. After its literal copy dst has
+        // 3 bytes written, but D=8 still reaches before DestinationStart.
+        byte[] payload = Build(bytes =>
+        {
+            bytes.Add(0xe1);
+            bytes.Add((byte)'A');
+            // sml_d LL=10 MMM=000 DDD=000, next byte D low=8. Opcode 0x80.
+            bytes.Add(0x80);
+            bytes.Add(8);
+            bytes.Add((byte)'X');
+            bytes.Add((byte)'Y');
+            AppendEos(bytes);
+        });
+
+        byte[] dst = new byte[16];
+        LzvnDecoderState state = new()
+        {
+            SourcePosition = 0,
+            SourceEnd = payload.Length,
+            DestinationPosition = 0,
+            DestinationStart = 0,
+            DestinationEnd = dst.Length,
+        };
+        LzvnDecoder.Decode(ref state, payload, dst);
+
+        state.Malformed.Should().BeTrue("ProcessLiteralAndMatch must reject D=8 when only 3 bytes are written");
+    }
+
+    [Fact]
+    public void PublicApi_MalformedLzvnBlock_ReportsMalformedNotDestinationFull()
+    {
+        // End-to-end: an LZVN block with a bad match distance should surface via the
+        // new overload as DecompressStatus.Malformed, not DestinationFull. Before the
+        // fix, distance validation simply returned false from ProcessLiteralAndMatch
+        // and the outer framer classified it as "decode stopped mid-block" → DstFull.
+        byte[] payload = Build(bytes =>
+        {
+            bytes.Add(0xe2);
+            bytes.Add((byte)'A');
+            bytes.Add((byte)'B');
+            bytes.Add(0x00);
+            bytes.Add(8);          // bad D
+            AppendEos(bytes);
+        });
+
+        byte[] stream = new byte[12 + payload.Length + 4];
+        int p = 0;
+        stream[p++] = 0x62; stream[p++] = 0x76; stream[p++] = 0x78; stream[p++] = 0x6e;  // bvxn
+        // n_raw_bytes = 16 (generous — we don't reach that point)
+        stream[p++] = 16; stream[p++] = 0; stream[p++] = 0; stream[p++] = 0;
+        // n_payload_bytes
+        stream[p++] = (byte)payload.Length; stream[p++] = 0; stream[p++] = 0; stream[p++] = 0;
+        payload.CopyTo(stream, p);
+        p += payload.Length;
+        // EOS magic
+        stream[p++] = 0x62; stream[p++] = 0x76; stream[p++] = 0x78; stream[p++] = 0x24;
+
+        byte[] dst = new byte[64];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().Be(DecompressStatus.Malformed);
+    }
+
     // --- Helpers ---
 
     private static byte[] Build(Action<List<byte>> action)
