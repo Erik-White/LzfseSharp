@@ -32,22 +32,27 @@ Good for CI and local verification; won't catch deep bugs that require millions
 of executions per second, but catches the class of crash-on-malformed-input
 bugs the decoder is most exposed to.
 
-### `--extended --seeds a,b,c,... [--iterations N]`
+### `--extended --seeds <list-or-range> [--iterations N]`
 
 Long-running in-process fuzz. Runs `N` iterations (default 5,000,000) per seed
-over the supplied list. Uses the same input generator and invariants as
+over the supplied seeds. Uses the same input generator and invariants as
 `--smoke`, just a lot more of them. Intended for manual / scheduled runs —
 there is a `Fuzz (extended)` GitHub Actions workflow with `workflow_dispatch`
 that invokes this.
 
+Seeds accept either a comma-separated list or an inclusive range:
+
 ```
 dotnet run -c Release --framework net10.0 --project LzfseSharp.Fuzz -- \
-    --extended --seeds 1,2,3,4,5,6,7,8,9,10 --iterations 30000000
+    --extended --seeds 1-100 --iterations 6000000
 ```
 
 Throughput in Release is ~2.4M iter/sec steady-state on a modern x64 CPU.
-The workflow default (10 seeds × 30M iterations = 300M total) takes about 2
-minutes of fuzzing wall-clock time.
+The workflow default (100 seeds × 6M iterations = 600M total) takes about
+5 minutes of fuzzing wall-clock time. Since this fuzzer has no coverage
+feedback, many seeds at few iterations and few seeds at many iterations
+explore nearly the same input space; the real lever for finding more bugs
+is <em>generator diversity</em>, not seed or iteration counts.
 
 ### `--libfuzzer`
 

@@ -13,8 +13,9 @@ namespace LzfseSharp.Fuzz;
 ///                                start-up). ~1s runtime. Suitable for CI.
 ///   --smoke --seed N           : Same, but fixed seed for reproducing a prior run.
 ///   --extended --seeds A,B,... : 5,000,000 iterations per comma-separated seed.
-///                                Manual / scheduled runs only — takes minutes per seed.
-///   --extended --seeds A,B,... --iterations N : Same with a custom iteration count.
+///                                Seeds can also be a range: --seeds 1-100.
+///                                Manual / scheduled runs only.
+///   --extended --seeds ... --iterations N : Same with a custom iteration count.
 ///   --libfuzzer                : SharpFuzz libFuzzer entry point. Requires
 ///                                instrumentation first — see README.md.
 ///   --afl                      : SharpFuzz out-of-process AFL++ entry point.
@@ -71,12 +72,35 @@ internal static class Program
         return null;
     }
 
+    /// <summary>
+    /// Parses <c>--seeds</c>. Accepts either a comma-separated list of integers
+    /// (<c>1,2,5,9</c>) or an inclusive range (<c>1-600</c>). Returns null when
+    /// absent or malformed.
+    /// </summary>
     private static int[]? ParseSeedList(string[] args)
     {
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] != "--seeds") continue;
-            string[] parts = args[i + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string value = args[i + 1];
+
+            // Range form: "<start>-<end>" inclusive.
+            int dashIdx = value.IndexOf('-', startIndex: value.StartsWith('-') ? 1 : 0);
+            if (dashIdx > 0 && !value.Contains(','))
+            {
+                if (int.TryParse(value.AsSpan(0, dashIdx), out int start)
+                    && int.TryParse(value.AsSpan(dashIdx + 1), out int end)
+                    && end >= start)
+                {
+                    int[] range = new int[end - start + 1];
+                    for (int k = 0; k < range.Length; k++) range[k] = start + k;
+                    return range;
+                }
+                return null;
+            }
+
+            // Comma-separated list form.
+            string[] parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             int[] seeds = new int[parts.Length];
             for (int j = 0; j < parts.Length; j++)
             {

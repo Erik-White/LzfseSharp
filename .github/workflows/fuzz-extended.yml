@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       seeds:
-        description: 'Comma-separated seeds to fuzz (default: 10 seeds)'
+        description: 'Seeds to fuzz: either a comma-separated list (1,2,5) or a range (1-100)'
         required: false
-        default: '1,2,3,4,5,6,7,8,9,10'
+        default: '1-100'
       iterations:
-        description: 'Iterations per seed (default: 30,000,000 ≈ 2 min wall clock)'
+        description: 'Iterations per seed (default: 6,000,000; with the default seed range this is ~5 min wall clock)'
         required: false
-        default: '30000000'
+        default: '6000000'
 
 jobs:
   fuzz:
