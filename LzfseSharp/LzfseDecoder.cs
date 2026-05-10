@@ -49,13 +49,8 @@ public static class LzfseDecoder
         LzfseDecoderState state = default;
         state.SourceBuffer = srcBuffer;
         state.DestinationBuffer = dstBuffer;
-        state.SourcePosition = 0;
-        state.SourceStart = 0;
         state.SourceEnd = srcBuffer.Length;
-        state.DestinationPosition = 0;
-        state.DestinationStart = 0;
         state.DestinationEnd = dstBuffer.Length;
-        state.EndOfStream = false;
         state.BlockMagic = Constants.NoBlockMagic;
         state.CompressedLzfseBlockState = LzfseCompressedBlockDecoderState.Rent();
 
@@ -80,7 +75,7 @@ public static class LzfseDecoder
         // Always return the bytes actually written. This is meaningful even when the
         // status is DestinationFull (caller can grow the buffer and retry) or when
         // the stream turned out to be malformed mid-way through a multi-block stream.
-        return state.DestinationPosition - state.DestinationStart;
+        return state.DestinationPosition;
     }
 
     /// <summary>
@@ -319,7 +314,7 @@ public static class LzfseDecoder
                         SourcePosition = s.SourcePosition,
                         SourceEnd = s.SourceEnd,
                         DestinationPosition = s.DestinationPosition,
-                        DestinationStart = s.DestinationStart,
+                        DestinationStart = 0,
                         DestinationEnd = s.DestinationEnd,
                         PreviousDistance = (int)bs.PreviousDistance,
                         EndOfStream = false
@@ -379,7 +374,7 @@ public static class LzfseDecoder
         ref LzfseCompressedBlockHeaderV1 header1)
     {
         FseInStream inStream = default;
-        int bufStart = s.SourceStart;
+        const int bufStart = 0;
         int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
         int buf = literalPayloadEnd; // Read bits backwards from the end
 
