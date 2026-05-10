@@ -8,7 +8,7 @@ namespace LzfseSharp.Lzvn;
 /// </summary>
 internal static class LzvnDecoder
 {
-    private sealed record OpcodeDecodeResult(
+    private readonly record struct OpcodeDecodeResult(
         int Status,
         nuint LiteralLength,
         nuint MatchLength,
@@ -353,9 +353,9 @@ internal static class LzvnDecoder
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static OpcodeDecodeResult DecodeOpcode(byte opcode, ReadOnlySpan<byte> source, int sourcePointer, int sourceLength)
     {
-
         // Classify opcode
         if (opcode >= LzvnConstants.LiteralOpcodeStart)
         {
