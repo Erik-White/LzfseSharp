@@ -207,6 +207,25 @@ public class LzvnDecoderTests
         return payload;
     }
 
+    [Fact]
+    public void Decompress_LzvnBlockWithUnderSizedPayload_DoesNotCrash()
+    {
+        byte[] input =
+        [
+            0x62, 0x76, 0x78, 0x6E,                          // bvxn magic
+            0x01, 0x00, 0x10, 0x00,                          // n_raw_bytes = 0x100001
+            0x0A, 0x00, 0x00, 0x00,                          // n_payload_bytes = 10
+            0xE0, 0x48,                                      // large-literal, L = 72 + 16 = 88
+            0x06, 0, 0, 0, 0, 0, 0, 0,                       // EOS marker
+            0x62, 0x76, 0x78, 0x24,                          // bvx$
+        ];
+
+        byte[] dst = new byte[37];
+        LzfseDecoder.Decompress(dst, input, out DecompressStatus status);
+
+        status.Should().NotBe(DecompressStatus.Ok);
+    }
+
     [Theory]
     [InlineData(1)] // just the 0x06 byte
     [InlineData(4)] // 0x06 + partial padding

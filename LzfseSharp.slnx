@@ -10,6 +10,7 @@
   <Project Path="LzfseSharp\LzfseSharp.csproj" Type="Classic C#" />
   <Project Path="LzfseSharp.Tests\LzfseSharp.Tests.csproj" Type="Classic C#" />
   <Project Path="LzfseSharp.Benchmarks\LzfseSharp.Benchmarks.csproj" Type="Classic C#" />
+  <Project Path="LzfseSharp.Fuzz\LzfseSharp.Fuzz.csproj" Type="Classic C#" />
   <Properties Name="Visual Studio">
     <Property Name="OpenWith" Value="Visual Studio Version 17" />
   </Properties>

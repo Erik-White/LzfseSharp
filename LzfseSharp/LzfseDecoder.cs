@@ -144,8 +144,11 @@ public static class LzfseDecoder
                             // Decode compressed headers
                             if (magic == Constants.CompressedV2BlockMagic)
                             {
-                                // Check we have the fixed part of the structure (magic + n_raw_bytes + 3x8 packed_fields)
-                                if (s.SourcePosition + 28 > s.SourceEnd)
+                                // Fixed V2 header: magic(4) + n_raw_bytes(4) + packed_fields[3] × 8 = 32 bytes.
+                                // DecodeV2ToV1 loads packed_fields[2] at offset 24..31, so the 32-byte
+                                // guard is the minimum safe bound even when the declared header size
+                                // (read from packed_fields[2]) is smaller.
+                                if (s.SourcePosition + 32 > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
 
                                 // Decode V2 header - this determines actual header size during parsing

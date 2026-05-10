@@ -138,6 +138,15 @@ internal static class LzvnDecoder
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
 
+        // See ProcessLiteral for rationale on this guard.
+        if (L > (nuint)sourceLength)
+        {
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.Malformed = true;
+            return false;
+        }
+
         if (!CopyLiteralBytes(dst, ref destinationPosition, src, ref sourcePosition, ref L, ref destinationLength, ref sourceLength))
         {
             state.SourcePosition = sourcePosition;
@@ -186,6 +195,18 @@ internal static class LzvnDecoder
     {
         sourcePosition += opcodeLength;
         sourceLength -= opcodeLength;
+
+        // A literal cannot be longer than the source bytes available for it: the
+        // encoder would have split it, and a stream claiming otherwise is malformed.
+        // Catches crafted blocks whose PayloadByteCount doesn't cover the opcodes
+        // inside them.
+        if (L > (nuint)sourceLength)
+        {
+            state.SourcePosition = sourcePosition;
+            state.DestinationPosition = destinationPosition;
+            state.Malformed = true;
+            return false;
+        }
 
         if (!CopyLiteralBytes(destination, ref destinationPosition, source, ref sourcePosition, ref L, ref destinationLength, ref sourceLength))
         {
@@ -262,10 +283,12 @@ internal static class LzvnDecoder
             for (nuint i = 0; i < L; i++)
                 dst[destinationPosition + (int)i] = src[sourcePosition + (int)i];
         }
-        else if (L > (nuint)destinationLength)
+        else if (L > (nuint)destinationLength && sourceLength >= destinationLength)
         {
             // Partial copy: fill remaining destination, return false with L reduced to
-            // the bytes still outstanding.
+            // the bytes still outstanding. Requires sufficient source to fill dst;
+            // if source is shorter (malformed payload declaration), fall through to
+            // the "return false" below so the caller treats it as a stream error.
             int copied = destinationLength;
             for (int i = 0; i < copied; i++)
                 dst[destinationPosition + i] = src[sourcePosition + i];

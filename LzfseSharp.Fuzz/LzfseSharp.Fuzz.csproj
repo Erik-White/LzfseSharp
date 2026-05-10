@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- SharpFuzz requires a single target framework for instrumentation -->
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <AssemblyName>LzfseSharp.Fuzz</AssemblyName>
+    <RootNamespace>LzfseSharp.Fuzz</RootNamespace>
+    <!-- No signing: SharpFuzz instruments the compiled DLL in-place, which invalidates the signature -->
+    <SignAssembly>false</SignAssembly>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpFuzz" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LzfseSharp\LzfseSharp.csproj" />
+  </ItemGroup>
+
+</Project>

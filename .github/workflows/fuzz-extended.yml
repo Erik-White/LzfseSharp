@@ -1,0 +1,43 @@
+name: Fuzz (extended)
+
+# Manually triggered long-running fuzz pass. Each CI run explores far more
+# inputs than the per-commit smoke test in build-and-test.yml, but is too
+# slow / noisy to run on every push. Use this before cutting a release, or
+# to investigate a suspected regression.
+on:
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: 'Seeds to fuzz: either a comma-separated list (1,2,5) or a range (1-100)'
+        required: false
+        default: '1-100'
+      iterations:
+        description: 'Iterations per seed (default: 2,500,000; with the default seed range this is ~5 min wall clock)'
+        required: false
+        default: '2500000'
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run extended fuzz
+        run: |
+          dotnet run --configuration Release --no-build \
+            --project LzfseSharp.Fuzz --framework net10.0 -- \
+            --extended \
+            --seeds ${{ github.event.inputs.seeds }} \
+            --iterations ${{ github.event.inputs.iterations }}
