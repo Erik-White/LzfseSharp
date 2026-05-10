@@ -108,6 +108,15 @@ internal static class BlockHeaderDecoder
 
         int sourcePosition = FreqTablesOffset;
         uint declaredHeaderSize = BitOperations.GetField(packedField2, 0, 32);
+
+        // The declared header size is untrusted — it must cover at least the fixed
+        // header (FreqTablesOffset bytes) and must not extend past the bytes actually
+        // supplied to us. Without this check a crafted stream with an inflated
+        // declaredHeaderSize causes an IndexOutOfRangeException in the freq loop
+        // below rather than a clean decode error.
+        if (declaredHeaderSize < FreqTablesOffset || declaredHeaderSize > (uint)inBytes.Length)
+            return new V2ToV1DecodeResult(outHeader, 0, -1);
+
         int sourceEnd = (int)declaredHeaderSize;
 
         int totalSymbols = Constants.EncodeLSymbols + Constants.EncodeMSymbols +

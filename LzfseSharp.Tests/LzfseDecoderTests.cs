@@ -145,6 +145,50 @@ public class LzfseDecoderTests
     }
 
     [Fact]
+    public void Decompress_V2BlockWithInflatedHeaderSize_ReportsMalformed()
+    {
+        // DecodeV2ToV1 reads the "header_size" field from packed_fields[2] bits 0..31.
+        // A crafted stream can set this arbitrarily; the decoder must reject it rather
+        // than run off the end of its input buffer. Before the guard, this caused an
+        // IndexOutOfRangeException in the freq-table refill loop.
+        byte[] stream = new byte[32 + 4];  // fixed V2 header + EOS magic, no freq data
+        MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 0); // n_raw_bytes = 0
+
+        // packed_fields[2] at offset 24; bits [0:31] = header_size = 1,000,000 (far beyond buffer).
+        ulong packedField2 = 1_000_000UL;
+        MemoryOperations.Store8(stream.AsSpan(24), packedField2);
+
+        MemoryOperations.Store4(stream.AsSpan(32), Constants.EndOfStreamBlockMagic);
+
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().Be(DecompressStatus.Malformed,
+            "a V2 header claiming more bytes than the stream provides must be reported as malformed, not crash");
+    }
+
+    [Fact]
+    public void Decompress_V2BlockWithUndersizedHeaderSize_ReportsMalformed()
+    {
+        // Inverse case: declaredHeaderSize < 32 (the fixed header size). Should reject
+        // up-front rather than enter the freq loop with sourcePosition (32) > sourceEnd.
+        byte[] stream = new byte[32 + 4];
+        MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 0);
+
+        ulong packedField2 = 16UL; // header_size = 16, less than FreqTablesOffset (32)
+        MemoryOperations.Store8(stream.AsSpan(24), packedField2);
+
+        MemoryOperations.Store4(stream.AsSpan(32), Constants.EndOfStreamBlockMagic);
+
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().Be(DecompressStatus.Malformed);
+    }
+
+    [Fact]
     public void Decompress_LzvnBlockWithTruncatedEosMarker_ReportsNonOk()
     {
         // Build a bvxn block whose payload is just {0x06}. PayloadByteCount = 1,
