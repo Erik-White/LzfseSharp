@@ -38,27 +38,27 @@ internal static class Constants
     public const int EncodeMaxDValue = 262139;
 
     // L, M, D extra bits and base values
-    public static readonly byte[] LExtraBits =
+    private static readonly byte[] _lExtraBits =
     [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 5, 8
     ];
 
-    public static readonly int[] LBaseValue =
+    private static readonly int[] _lBaseValue =
     [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 28, 60
     ];
 
-    public static readonly byte[] MExtraBits =
+    private static readonly byte[] _mExtraBits =
     [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 8, 11
     ];
 
-    public static readonly int[] MBaseValue =
+    private static readonly int[] _mBaseValue =
     [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 24, 56, 312
     ];
 
-    public static readonly byte[] DExtraBits =
+    private static readonly byte[] _dExtraBits =
     [
         0,  0,  0,  0,  1,  1,  1,  1,  2,  2,  2,  2,  3,  3,  3,  3,
         4,  4,  4,  4,  5,  5,  5,  5,  6,  6,  6,  6,  7,  7,  7,  7,
@@ -66,7 +66,7 @@ internal static class Constants
         12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15
     ];
 
-    public static readonly int[] DBaseValue =
+    private static readonly int[] _dBaseValue =
     [
         0,      1,      2,      3,     4,     6,     8,     10,    12,    16,
         20,     24,     28,     36,    44,    52,    60,    76,    92,    108,
@@ -76,4 +76,11 @@ internal static class Constants
         24572,  28668,  32764,  40956, 49148, 57340, 65532, 81916, 98300, 114684,
         131068, 163836, 196604, 229372
     ];
+
+    public static ReadOnlySpan<byte> LExtraBits => _lExtraBits;
+    public static ReadOnlySpan<int> LBaseValue => _lBaseValue;
+    public static ReadOnlySpan<byte> MExtraBits => _mExtraBits;
+    public static ReadOnlySpan<int> MBaseValue => _mBaseValue;
+    public static ReadOnlySpan<byte> DExtraBits => _dExtraBits;
+    public static ReadOnlySpan<int> DBaseValue => _dBaseValue;
 }
