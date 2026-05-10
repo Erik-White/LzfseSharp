@@ -69,6 +69,54 @@ public class V1BlockTests
     }
 
     [Fact]
+    public void Decompress_V1BlockWithNMatchesExceedingMax_Rejected()
+    {
+        // See per-block encoder limits in src/lzfse_internal.h and src/lzfse_decode_base.c
+        // lzfse_check_block_header_v1): NMatches must be <= MATCHES_PER_BLOCK (10000).
+        byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) =>
+        {
+            h.NMatches = (uint)(Constants.MatchesPerBlock + 1);
+        });
+
+        byte[] dst = new byte[50000];
+        int result = LzfseDecoder.Decompress(dst, v1Stream);
+
+        result.Should().Be(0, "NMatches > MatchesPerBlock must be rejected by CheckBlockHeaderV1");
+    }
+
+    [Fact]
+    public void Decompress_V1BlockWithNLiteralsExceedingMax_Rejected()
+    {
+        // CheckBlockHeaderV1 enforces NLiterals <= LiteralsPerBlock (40000).
+        byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) =>
+        {
+            h.NLiterals = (uint)(Constants.LiteralsPerBlock + 4); // still a multiple of 4
+        });
+
+        byte[] dst = new byte[50000];
+        int result = LzfseDecoder.Decompress(dst, v1Stream);
+
+        result.Should().Be(0, "NLiterals > LiteralsPerBlock must be rejected");
+    }
+
+    [Theory]
+    [InlineData(1024)] // LiteralState must be < EncodeLiteralStates (1024)
+    [InlineData(2048)]
+    [InlineData(ushort.MaxValue)]
+    public void Decompress_V1BlockWithOutOfRangeLiteralState_Rejected(ushort badState)
+    {
+        byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) =>
+        {
+            h.LiteralState[0] = badState;
+        });
+
+        byte[] dst = new byte[50000];
+        int result = LzfseDecoder.Decompress(dst, v1Stream);
+
+        result.Should().Be(0, $"LiteralState[0]={badState} >= EncodeLiteralStates must be rejected");
+    }
+
+    [Fact]
     public void Decompress_V1BlockWithFreqSumBelowStateCount_Rejected()
     {
         // Shave 1 off the largest entry in the literal frequency table so the sum
