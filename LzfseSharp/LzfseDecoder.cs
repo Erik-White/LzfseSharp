@@ -33,9 +33,17 @@ public static class LzfseDecoder
         state.DestinationEnd = dstBuffer.Length;
         state.EndOfStream = false;
         state.BlockMagic = Constants.NoBlockMagic;
-        state.CompressedLzfseBlockState = new LzfseCompressedBlockDecoderState();
+        state.CompressedLzfseBlockState = LzfseCompressedBlockDecoderState.Rent();
 
-        int result = DecodeInternal(ref state);
+        int result;
+        try
+        {
+            result = DecodeInternal(ref state);
+        }
+        finally
+        {
+            state.CompressedLzfseBlockState.Return();
+        }
 
         if (result == Constants.StatusDstFull)
             throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
