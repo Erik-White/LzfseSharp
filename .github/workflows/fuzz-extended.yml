@@ -12,9 +12,9 @@ on:
         required: false
         default: '1-100'
       iterations:
-        description: 'Iterations per seed (default: 6,000,000; with the default seed range this is ~5 min wall clock)'
+        description: 'Iterations per seed (default: 2,500,000; with the default seed range this is ~5 min wall clock)'
         required: false
-        default: '6000000'
+        default: '2500000'
 
 jobs:
   fuzz:

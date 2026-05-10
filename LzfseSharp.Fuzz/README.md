@@ -44,15 +44,20 @@ Seeds accept either a comma-separated list or an inclusive range:
 
 ```
 dotnet run -c Release --framework net10.0 --project LzfseSharp.Fuzz -- \
-    --extended --seeds 1-100 --iterations 6000000
+    --extended --seeds 1-100 --iterations 2500000
 ```
 
-Throughput in Release is ~2.4M iter/sec steady-state on a modern x64 CPU.
-The workflow default (100 seeds × 6M iterations = 600M total) takes about
-5 minutes of fuzzing wall-clock time. Since this fuzzer has no coverage
-feedback, many seeds at few iterations and few seeds at many iterations
-explore nearly the same input space; the real lever for finding more bugs
-is <em>generator diversity</em>, not seed or iteration counts.
+Throughput in Release is ~850K iter/sec steady-state on a modern x64 CPU
+(the richer generator produces more work per iteration than raw-bytes
+fuzzers — larger inputs, more "valid header + random body" shapes that
+make the decoder walk further before bailing). The workflow default
+(100 seeds × 2.5M iterations = 250M total) takes about 5 minutes of
+fuzzing wall-clock time.
+
+Since this fuzzer has no coverage feedback, many seeds at few iterations
+and few seeds at many iterations explore nearly the same input space; the
+real lever for finding more bugs is <em>generator diversity</em>, not
+seed or iteration counts.
 
 ### `--libfuzzer`
 
