@@ -132,7 +132,7 @@ public class MultiBlockTests
     }
 
     [Fact]
-    public void Decompress_StreamMissingEosMagic_ReportsError()
+    public void Decompress_StreamMissingEosMagic_ReportsTruncated()
     {
         // Valid uncompressed block with no trailing bvx$ marker.
         List<byte> stream = new();
@@ -142,9 +142,10 @@ public class MultiBlockTests
         // No EOS — source is truncated from the decoder's perspective.
 
         byte[] dst = new byte[16];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray());
+        int result = LzfseDecoder.Decompress(dst, stream.ToArray(), out DecompressStatus status);
 
-        result.Should().Be(0, "a stream without bvx$ terminator should be reported as truncated");
+        status.Should().Be(DecompressStatus.SourceTruncated, "a stream without bvx$ terminator is truncated");
+        result.Should().Be(3, "the uncompressed block before the missing EOS was written to dst");
     }
 
     private static void AppendUint32(List<byte> buffer, uint value)

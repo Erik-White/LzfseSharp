@@ -15,12 +15,36 @@ public static class LzfseDecoder
     /// </summary>
     /// <param name="dstBuffer">Destination buffer for decompressed data</param>
     /// <param name="srcBuffer">Source buffer containing compressed data</param>
-    /// <returns>The number of bytes written to the destination buffer. Returns 0 on error.</returns>
+    /// <returns>
+    /// The number of bytes written to the destination buffer. 0 when
+    /// the source was empty, destination was empty, source was truncated, or the stream was malformed.
+    /// </returns>
     /// <exception cref="ArgumentException">The destination buffer is too small to hold the decompressed output.</exception>
     public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer)
     {
+        int written = Decompress(dstBuffer, srcBuffer, out DecompressStatus status);
+        if (status == DecompressStatus.DestinationFull)
+            throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
+        return written;
+    }
+
+    /// <summary>
+    /// Decompresses LZFSE-compressed data from source buffer to destination buffer
+    /// </summary>
+    /// <param name="dstBuffer">Destination buffer for decompressed data.</param>
+    /// <param name="srcBuffer">Source buffer containing compressed data.</param>
+    /// <param name="status">Set to indicate whether decoding completed, the source was truncated, the destination was too small, or the stream was malformed.</param>
+    /// <returns>
+    /// The number of bytes written to the destination buffer. May be less than the
+    /// stream's uncompressed size when <paramref name="status"/> is <see cref="DecompressStatus.DestinationFull"/>.
+    /// </returns>
+    public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer, out DecompressStatus status)
+    {
         if (srcBuffer.Length == 0 || dstBuffer.Length == 0)
+        {
+            status = DecompressStatus.SourceTruncated;
             return 0;
+        }
 
         LzfseDecoderState state = default;
         state.SourceBuffer = srcBuffer;
@@ -45,12 +69,18 @@ public static class LzfseDecoder
             state.CompressedLzfseBlockState.Return();
         }
 
-        if (result == Constants.StatusDstFull)
-            throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
+        status = result switch
+        {
+            Constants.StatusOk => DecompressStatus.Ok,
+            Constants.StatusSrcEmpty => DecompressStatus.SourceTruncated,
+            Constants.StatusDstFull => DecompressStatus.DestinationFull,
+            _ => DecompressStatus.Malformed,
+        };
 
-        return result == Constants.StatusOk
-            ? state.DestinationPosition - state.DestinationStart
-            : 0;
+        // Always return the bytes actually written. This is meaningful even when the
+        // status is DestinationFull (caller can grow the buffer and retry) or when
+        // the stream turned out to be malformed mid-way through a multi-block stream.
+        return state.DestinationPosition - state.DestinationStart;
     }
 
     /// <summary>

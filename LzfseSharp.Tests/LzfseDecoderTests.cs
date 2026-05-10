@@ -145,7 +145,7 @@ public class LzfseDecoderTests
     }
 
     [Fact]
-    public void Decompress_LzvnBlockWithTruncatedEosMarker_DoesNotSilentlySucceed()
+    public void Decompress_LzvnBlockWithTruncatedEosMarker_ReportsNonOk()
     {
         // Build a bvxn block whose payload is just {0x06}. PayloadByteCount = 1,
         // so the outer bounds check is satisfied, but the 8-byte EOS marker is truncated.
@@ -157,19 +157,8 @@ public class LzfseDecoderTests
         MemoryOperations.Store4(stream.AsSpan(13), Constants.EndOfStreamBlockMagic);
 
         byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
 
-        // The decoder must not treat this as a successful decode. The current public API
-        // reports malformed-vs-truncated ambiguously (as StatusDstFull → ArgumentException);
-        // returning 0 would also be acceptable. What we explicitly do not want is a non-zero
-        // "bytes written" value that hides a truncated stream.
-        try
-        {
-            int result = LzfseDecoder.Decompress(dst, stream);
-            result.Should().Be(0, "a truncated EOS marker must not be decoded as a valid non-empty stream");
-        }
-        catch (ArgumentException)
-        {
-            // Acceptable: decoder signalled malformed input via the dst-full path.
-        }
+        status.Should().NotBe(DecompressStatus.Ok, "a truncated EOS marker is not a successful decode");
     }
 }
