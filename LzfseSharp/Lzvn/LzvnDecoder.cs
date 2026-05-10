@@ -224,9 +224,19 @@ internal static class LzvnDecoder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool CopyLiteralBytes(Span<byte> dst, ref int destinationPosition, ReadOnlySpan<byte> src, ref int sourcePosition, ref nuint L, ref int destinationLength, ref int sourceLength)
     {
+        // Two fast paths, mirroring the reference:
+        //   * Small literals (L <= 3, from sml_d/med_d/lrg_d/pre_d opcodes): one 4-byte store.
+        //   * Larger literals (L up to 271, from sml_l/lrg_l opcodes): 8-byte stride up to L.
+        // Both fast paths can slop past the logical L bytes (store4 writes 4, store8 loop
+        // can write up to L+7); the caller's outer framing ensures dst has enough slack.
         if (destinationLength >= 4 && sourceLength >= 4 && L <= 3)
         {
             MemoryOperations.Store4(dst[destinationPosition..], MemoryOperations.Load4(src[sourcePosition..]));
+        }
+        else if ((nuint)destinationLength >= L + 7 && (nuint)sourceLength >= L + 7)
+        {
+            for (nuint i = 0; i < L; i += 8)
+                MemoryOperations.Store8(dst[(destinationPosition + (int)i)..], MemoryOperations.Load8(src[(sourcePosition + (int)i)..]));
         }
         else if (L <= (nuint)destinationLength && L <= (nuint)sourceLength)
         {
