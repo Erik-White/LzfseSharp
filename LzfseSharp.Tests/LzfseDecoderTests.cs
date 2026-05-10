@@ -144,6 +144,25 @@ public class LzfseDecoderTests
         dst.Should().Equal((byte)'A', (byte)'B', (byte)'Y', (byte)'Z');
     }
 
+    [Theory]
+    [InlineData(28)] // bvx2 magic claims a header but fewer than 32 bytes of fixed-header data follow
+    [InlineData(29)]
+    [InlineData(30)]
+    [InlineData(31)]
+    public void Decompress_V2BlockWithIncompleteFixedHeader_ReportsTruncated(int totalLength)
+    {
+        byte[] stream = new byte[totalLength];
+        MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
+        // Remaining bytes are zeros — their contents don't matter; the outer bounds
+        // check must reject before they're read.
+
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+
+        status.Should().NotBe(DecompressStatus.Ok,
+            "a truncated V2 fixed header must be rejected, never accepted");
+    }
+
     [Fact]
     public void Decompress_V2BlockWithInflatedHeaderSize_ReportsMalformed()
     {
