@@ -3,23 +3,25 @@ using System;
 namespace LzfseSharp.Fuzz;
 
 /// <summary>
-/// Deterministic in-process fuzz. Generates a fixed number of inputs from a
-/// fixed seed, asserts the decoder is total. Requires no external tooling;
-/// suitable for CI and local verification.
+/// In-process fuzz runner. Generates a fixed number of inputs from a seed that
+/// the caller may override, and asserts the decoder is total. Requires no
+/// external tooling.
+///
+/// The seed defaults to a time-derived value so repeated CI runs explore
+/// different inputs; the actual seed is always logged so failures can be
+/// reproduced locally via <c>--seed &lt;value&gt;</c>.
 /// </summary>
 internal static class SmokeRunner
 {
     private const int Iterations = 10_000;
-
-    // Fixed seed for reproducibility. If a smoke run fails, the seed + iteration
-    // number from the output uniquely identifies the offending input.
-    private const int Seed = 0x4C5A4653; // "LZFS" as ASCII
-
     private const int MaxFailuresBeforeAbort = 10;
 
-    public static int Run()
+    public static int Run(int? seed = null)
     {
-        Random rng = new Random(Seed);
+        int effectiveSeed = seed ?? Random.Shared.Next();
+        Console.WriteLine($"Smoke run: seed={effectiveSeed} iterations={Iterations}");
+
+        Random rng = new Random(effectiveSeed);
         int failures = 0;
 
         for (int i = 0; i < Iterations; i++)

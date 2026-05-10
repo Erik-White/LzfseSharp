@@ -10,17 +10,27 @@ at all. Unhandled exceptions, out-of-range return values, and non-deterministic
 
 ### `--smoke` (default)
 
-Runs 10,000 fixed-seed iterations in-process. No external tooling required.
+Runs 10,000 iterations in-process with a freshly-chosen random seed. The seed
+is printed on start-up so any failure can be reproduced via `--seed <N>`.
 
 ```
 dotnet run -c Release --framework net10.0 --project LzfseSharp.Fuzz -- --smoke
 ```
 
-Exits 0 with `OK: 10000 iterations, no invariant violations.` on success, or 1
-with the offending inputs printed to stderr on failure. Good for CI and local
-verification; won't catch deep bugs that require thousands of executions per
-second, but catches the class of crash-on-malformed-input bugs the decoder is
-most exposed to.
+Output on success:
+```
+Smoke run: seed=994176900 iterations=10000
+OK: 10000 iterations, no invariant violations.
+```
+
+To replay a specific seed:
+```
+dotnet run -c Release --framework net10.0 --project LzfseSharp.Fuzz -- --smoke --seed 994176900
+```
+
+Good for CI and local verification; won't catch deep bugs that require millions
+of executions per second, but catches the class of crash-on-malformed-input
+bugs the decoder is most exposed to.
 
 ### `--libfuzzer`
 
@@ -66,7 +76,10 @@ SharpFuzz out-of-process AFL++ entry point. Same instrumentation workflow as
 
 ## Historical finds
 
-The `--smoke` mode found its first bug on its first run: a bvx2 block with
-28–31 bytes of fixed header data threw `ArgumentOutOfRangeException` from a
-span slice (the outer guard checked for 28 bytes; `DecodeV2ToV1` needs 32).
-Regression test: `LzfseDecoderTests.Decompress_V2BlockWithIncompleteFixedHeader_ReportsTruncated`.
+- **bvx2 with 28–31 bytes of fixed header** threw `ArgumentOutOfRangeException`
+  from a span slice — the outer guard checked for 28 bytes but `DecodeV2ToV1`
+  needs 32. Regression test: `LzfseDecoderTests.Decompress_V2BlockWithIncompleteFixedHeader_ReportsTruncated`.
+- **LZVN block with under-sized `PayloadByteCount`** (large-literal opcode
+  claiming more bytes than the declared payload) threw `IndexOutOfRangeException`
+  from `CopyLiteralBytes`' partial-copy branch. Regression test:
+  `LzvnDecoderTests.Decompress_LzvnBlockWithUnderSizedPayload_DoesNotCrash`.
