@@ -22,6 +22,10 @@ public class RoundTripTests
 
         bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
+
+        // The allocating overload must produce the same bytes with no caller sizing.
+        byte[] allocated = LzfseDecoder.Decompress(compressed);
+        allocated.Should().Equal(original);
     }
 
     [Theory]

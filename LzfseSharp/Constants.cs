@@ -32,6 +32,23 @@ internal static class Constants
     public const int MatchesPerBlock = 10000;
     public const int LiteralsPerBlock = 4 * MatchesPerBlock;
 
+    // Block header sizes
+    public const int UncompressedBlockHeaderSize = 8;
+    public const int LzvnCompressedBlockHeaderSize = 12;
+    public const int V2FixedHeaderSize = 32;
+
+    // V1 header layout:
+    //   8 * uint32  (magic, n_raw_bytes, n_payload_bytes, n_literals,
+    //                n_matches, n_literal_payload_bytes, n_lmd_payload_bytes, literal_bits)
+    //   4 * uint16  (literal_state[4])
+    //   1 * uint32  (lmd_bits)
+    //   3 * uint16  (l_state, m_state, d_state)
+    //   freq tables (uint16 per symbol)
+    public const int V1HeaderSize = 8 * sizeof(uint) + 4 * sizeof(ushort)
+                                  + sizeof(uint) + 3 * sizeof(ushort)
+                                  + sizeof(ushort) * (EncodeLSymbols + EncodeMSymbols +
+                                                      EncodeDSymbols + EncodeLiteralSymbols);
+
     // Maximum encodable values
     public const int EncodeMaxLValue = 315;
     public const int EncodeMaxMValue = 2359;
