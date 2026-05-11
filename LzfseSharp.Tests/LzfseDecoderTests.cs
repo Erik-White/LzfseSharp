@@ -334,6 +334,36 @@ public class LzfseDecoderTests
     }
 
     [Fact]
+    public void DecompressAllocating_V2BlockWithCorruptFreqBits_Throws()
+    {
+        // Build a V2 block whose fixed 32-byte header passes outer bounds checks
+        // (declared header_size = 33 is in range) but whose 1-byte freq-table bit
+        // stream can't supply enough bits for all 360 freq symbols. This exercises
+        // the scan-phase failure path where BlockHeaderParser.DecodeV2ToV1 returns
+        // Status != 0 and ReadV2BlockLength throws InvalidDataException — before
+        // the decode phase ever runs.
+        const int declaredHeaderSize = 33;
+        byte[] stream = new byte[declaredHeaderSize + 4];
+
+        MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 0);                 // n_raw_bytes
+        // packed_fields[0] and [1] left zero (no literals, no matches, no payload)
+        MemoryOperations.Store8(stream.AsSpan(24), (ulong)declaredHeaderSize); // packed_fields[2]: header_size in bits [0:31]
+        stream[32] = 0x00;                                            // 1 byte of freq data — not enough for 360 symbols
+
+        MemoryOperations.Store4(stream.AsSpan(33), Constants.EndOfStreamBlockMagic);
+
+        // Span overload: decode-phase malformed detection.
+        byte[] dst = new byte[100];
+        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+        status.Should().Be(DecompressStatus.Malformed);
+
+        // Allocating overload: scan-phase rejection via InvalidDataException.
+        Action act = () => LzfseDecoder.Decompress(stream);
+        act.Should().Throw<System.IO.InvalidDataException>();
+    }
+
+    [Fact]
     public void DecompressAllocating_RoundTripMatchesBufferOverload()
     {
         byte[] stream = [
