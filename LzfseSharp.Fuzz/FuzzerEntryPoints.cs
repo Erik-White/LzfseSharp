@@ -10,18 +10,11 @@ namespace LzfseSharp.Fuzz;
 /// </summary>
 internal static class FuzzerEntryPoints
 {
-    // A generous upper bound on the decompressed size we try per fuzz input.
-    // Larger values waste memory without exercising more decoder paths; smaller
-    // values cause many valid inputs to report DestinationFull and mask bugs
-    // that only manifest after a long decode.
-    private const int DestinationBufferSize = 65_536;
-
     public static int RunLibFuzzer()
     {
         Fuzzer.LibFuzzer.Run(input =>
         {
-            byte[] dst = new byte[DestinationBufferSize];
-            DecoderInvariants.Check(dst, input.ToArray());
+            DecoderInvariants.Check(input.ToArray());
         });
         return 0;
     }
@@ -32,8 +25,7 @@ internal static class FuzzerEntryPoints
         {
             using MemoryStream ms = new MemoryStream();
             stream.CopyTo(ms);
-            byte[] dst = new byte[DestinationBufferSize];
-            DecoderInvariants.Check(dst, ms.ToArray());
+            DecoderInvariants.Check(ms.ToArray());
         });
         return 0;
     }

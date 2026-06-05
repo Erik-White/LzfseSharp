@@ -27,16 +27,15 @@ internal static class SmokeRunner
         for (int i = 0; i < Iterations; i++)
         {
             byte[] input = InputGenerator.Generate(rng);
-            byte[] dst = new byte[rng.Next(1, 4096)];
 
             try
             {
-                DecoderInvariants.Check(dst, input);
+                DecoderInvariants.Check(input);
             }
             catch (Exception ex)
             {
                 failures++;
-                ReportFailure(i, input, dst.Length, ex);
+                ReportFailure(i, input, ex);
                 if (failures >= MaxFailuresBeforeAbort)
                 {
                     Console.Error.WriteLine("Too many failures, aborting.");
@@ -55,7 +54,7 @@ internal static class SmokeRunner
         return 0;
     }
 
-    private static void ReportFailure(int iteration, byte[] input, int dstSize, Exception ex)
+    private static void ReportFailure(int iteration, byte[] input, Exception ex)
     {
         Console.Error.WriteLine($"[iter {iteration}] invariant violated: {ex.GetType().Name}: {ex.Message}");
 
@@ -63,6 +62,5 @@ internal static class SmokeRunner
         string preview = BitConverter.ToString(input, 0, previewLength);
         string ellipsis = input.Length > previewLength ? "..." : "";
         Console.Error.WriteLine($"  input ({input.Length} bytes): {preview}{ellipsis}");
-        Console.Error.WriteLine($"  dst size: {dstSize}");
     }
 }

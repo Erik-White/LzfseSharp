@@ -220,10 +220,10 @@ public class LzvnDecoderTests
             0x62, 0x76, 0x78, 0x24,                          // bvx$
         ];
 
-        byte[] dst = new byte[37];
-        LzfseDecoder.Decompress(dst, input, out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(input);
 
-        status.Should().NotBe(DecompressStatus.Ok);
+        act.Should().Throw<Exception>()
+            .Which.Should().Match(e => e is InvalidDataException || e is EndOfStreamException);
     }
 
     [Theory]

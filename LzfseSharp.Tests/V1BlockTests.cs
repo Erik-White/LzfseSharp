@@ -25,23 +25,20 @@ public class V1BlockTests
         byte[] v1Stream = RepackV2BlocksAsV1(v2Stream, out int v2BlocksFound);
         v2BlocksFound.Should().BeGreaterThan(0, "the reference must emit at least one V2 block for this test to be meaningful");
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, v1Stream);
+        byte[] decompressed = StreamCodec.Decode(v1Stream);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
     [Fact]
-    public void Decompress_V1BlockTruncatedHeader_ReturnsZero()
+    public void Decompress_V1BlockTruncatedHeader_Throws()
     {
         // Just the magic, no header body. Must be rejected (not read past the end).
         byte[] src = [0x62, 0x76, 0x78, 0x31];
-        byte[] dst = new byte[100];
 
-        int result = LzfseDecoder.Decompress(dst, src);
+        Action act = () => StreamCodec.Decode(src);
 
-        result.Should().Be(0);
+        act.Should().Throw<EndOfStreamException>();
     }
 
     private delegate void HeaderMutation(ref LzfseCompressedBlockHeaderV1 header);
@@ -51,10 +48,9 @@ public class V1BlockTests
     {
         byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) => h.NLiterals -= 1);
 
-        byte[] dst = new byte[50000];
-        int result = LzfseDecoder.Decompress(dst, v1Stream);
+        Action act = () => StreamCodec.Decode(v1Stream);
 
-        result.Should().Be(0, "NLiterals not divisible by 4 must be rejected by CheckBlockHeaderV1");
+        act.Should().Throw<InvalidDataException>("NLiterals not divisible by 4 must be rejected by CheckBlockHeaderV1");
     }
 
     [Fact]
@@ -62,10 +58,9 @@ public class V1BlockTests
     {
         byte[] v1Stream = RepackReferenceAsV1((ref LzfseCompressedBlockHeaderV1 h) => h.NPayloadBytes += 1);
 
-        byte[] dst = new byte[50000];
-        int result = LzfseDecoder.Decompress(dst, v1Stream);
+        Action act = () => StreamCodec.Decode(v1Stream);
 
-        result.Should().Be(0, "NPayloadBytes disagreeing with the literal/LMD sum must be rejected");
+        act.Should().Throw<InvalidDataException>("NPayloadBytes disagreeing with the literal/LMD sum must be rejected");
     }
 
     [Fact]
@@ -78,10 +73,9 @@ public class V1BlockTests
             h.NMatches = (uint)(Constants.MatchesPerBlock + 1);
         });
 
-        byte[] dst = new byte[50000];
-        int result = LzfseDecoder.Decompress(dst, v1Stream);
+        Action act = () => StreamCodec.Decode(v1Stream);
 
-        result.Should().Be(0, "NMatches > MatchesPerBlock must be rejected by CheckBlockHeaderV1");
+        act.Should().Throw<InvalidDataException>("NMatches > MatchesPerBlock must be rejected by CheckBlockHeaderV1");
     }
 
     [Fact]
@@ -93,10 +87,9 @@ public class V1BlockTests
             h.NLiterals = (uint)(Constants.LiteralsPerBlock + 4); // still a multiple of 4
         });
 
-        byte[] dst = new byte[50000];
-        int result = LzfseDecoder.Decompress(dst, v1Stream);
+        Action act = () => StreamCodec.Decode(v1Stream);
 
-        result.Should().Be(0, "NLiterals > LiteralsPerBlock must be rejected");
+        act.Should().Throw<InvalidDataException>("NLiterals > LiteralsPerBlock must be rejected");
     }
 
     [Theory]
@@ -110,10 +103,9 @@ public class V1BlockTests
             h.LiteralState[0] = badState;
         });
 
-        byte[] dst = new byte[50000];
-        int result = LzfseDecoder.Decompress(dst, v1Stream);
+        Action act = () => StreamCodec.Decode(v1Stream);
 
-        result.Should().Be(0, $"LiteralState[0]={badState} >= EncodeLiteralStates must be rejected");
+        act.Should().Throw<InvalidDataException>($"LiteralState[0]={badState} >= EncodeLiteralStates must be rejected");
     }
 
     [Fact]
@@ -134,10 +126,9 @@ public class V1BlockTests
             header.LiteralFreq[maxIdx] -= 1;
         });
 
-        byte[] dst = new byte[50000];
-        int result = LzfseDecoder.Decompress(dst, v1Stream);
+        Action act = () => StreamCodec.Decode(v1Stream);
 
-        result.Should().Be(0, "a literal frequency table whose sum is below EncodeLiteralStates must be rejected");
+        act.Should().Throw<InvalidDataException>("a literal frequency table whose sum is below EncodeLiteralStates must be rejected");
     }
 
     private static byte[] RepackReferenceAsV1(HeaderMutation mutate)

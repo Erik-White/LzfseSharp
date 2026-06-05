@@ -404,12 +404,11 @@ public class LzvnOpcodeTests
     }
 
     [Fact]
-    public void PublicApi_MalformedLzvnBlock_ReportsMalformedNotDestinationFull()
+    public void PublicApi_MalformedLzvnBlock_ThrowsInvalidData()
     {
-        // End-to-end: an LZVN block with a bad match distance should surface via the
-        // new overload as DecompressStatus.Malformed, not DestinationFull. Before the
-        // fix, distance validation simply returned false from ProcessLiteralAndMatch
-        // and the outer framer classified it as "decode stopped mid-block" → DstFull.
+        // End-to-end: an LZVN block with a bad match distance is a malformed stream and
+        // must surface as InvalidDataException, not be mistaken for a destination-full
+        // yield (which the streaming driver would otherwise retry).
         byte[] payload = Build(bytes =>
         {
             bytes.Add(0xe2);
@@ -432,10 +431,9 @@ public class LzvnOpcodeTests
         // EOS magic
         stream[p++] = 0x62; stream[p++] = 0x76; stream[p++] = 0x78; stream[p++] = 0x24;
 
-        byte[] dst = new byte[64];
-        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(stream);
 
-        status.Should().Be(DecompressStatus.Malformed);
+        act.Should().Throw<InvalidDataException>();
     }
 
     // --- Helpers ---

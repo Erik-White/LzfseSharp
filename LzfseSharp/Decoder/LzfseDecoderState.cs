@@ -1,15 +1,18 @@
 namespace LzfseSharp.Decoder;
 
 /// <summary>
-/// Main LZFSE decoder state
+/// Main LZFSE decoder state. Holds only the positional and per-block bookkeeping that
+/// must persist across decode steps; the source and destination buffers are passed in
+/// as spans on each call so this struct can be stored as a field by the streaming driver
+/// (a <c>ref struct</c> holding spans could not be).
 /// </summary>
-internal ref struct LzfseDecoderState
+internal struct LzfseDecoderState
 {
-    // An offset into <see cref="SourceBuffer"/>
+    // An offset into the source buffer supplied to the decode methods.
     public int SourcePosition;
     public int SourceEnd;
 
-    // An offset into <see cref="DestinationBuffer"/>
+    // An offset into the destination (window) buffer supplied to the decode methods.
     public int DestinationPosition;
     public int DestinationEnd;
 
@@ -21,8 +24,4 @@ internal ref struct LzfseDecoderState
     public LzfseCompressedBlockDecoderState CompressedLzfseBlockState;
     public LzvnCompressedBlockDecoderState CompressedLzvnBlockState;
     public UncompressedBlockDecoderState UncompressedBlockState;
-
-    // Buffers
-    public ReadOnlySpan<byte> SourceBuffer;
-    public Span<byte> DestinationBuffer;
 }

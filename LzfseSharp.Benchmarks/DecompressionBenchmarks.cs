@@ -13,6 +13,8 @@ public class DecompressionBenchmarks
 {
     private byte[] _compressedData = Array.Empty<byte>();
     private byte[] _decompressedBuffer = Array.Empty<byte>();
+    private MemoryStream _source = new();
+    private MemoryStream _destination = new();
     private int _expectedDecompressedSize;
 
     [Params(1, 10, 100, 1000)]
@@ -31,8 +33,10 @@ public class DecompressionBenchmarks
         Array.Copy(compressedBuffer, _compressedData, compressedSize);
         _expectedDecompressedSize = uncompressedData.Length;
 
-        // Allocate buffer for decompression
+        // Allocate the lzfse-net buffer and the reusable streams for the LzfseSharp path.
         _decompressedBuffer = new byte[_expectedDecompressedSize];
+        _source = new MemoryStream(_compressedData, writable: false);
+        _destination = new MemoryStream(_expectedDecompressedSize);
 
         // Verify both implementations can decompress
         VerifyDecompression();
@@ -41,12 +45,13 @@ public class DecompressionBenchmarks
     private void VerifyDecompression()
     {
         // Verify LzfseSharp
-        Array.Clear(_decompressedBuffer);
-        int bytesWritten = LzfseDecoder.Decompress(_decompressedBuffer, _compressedData);
-        if (bytesWritten != _expectedDecompressedSize)
+        _source.Position = 0;
+        _destination.SetLength(0);
+        LzfseDecoder.Decompress(_source, _destination);
+        if (_destination.Length != _expectedDecompressedSize)
         {
             throw new InvalidOperationException(
-                $"LzfseSharp decompression failed: expected {_expectedDecompressedSize} bytes, got {bytesWritten}");
+                $"LzfseSharp decompression failed: expected {_expectedDecompressedSize} bytes, got {_destination.Length}");
         }
 
         // Verify lzfse-net
@@ -89,10 +94,12 @@ public class DecompressionBenchmarks
     }
 
     [Benchmark(Baseline = true)]
-    public int LzfseSharp_Decompress()
+    public long LzfseSharp_Decompress()
     {
-        Array.Clear(_decompressedBuffer);
-        return LzfseDecoder.Decompress(_decompressedBuffer, _compressedData);
+        _source.Position = 0;
+        _destination.SetLength(0);
+        LzfseDecoder.Decompress(_source, _destination);
+        return _destination.Length;
     }
 
     [Benchmark]

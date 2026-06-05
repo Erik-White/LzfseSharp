@@ -17,10 +17,8 @@ public class CrossValidationTests
         byte[] original = Encoding.UTF8.GetBytes(testData);
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
         Encoding.UTF8.GetString(decompressed).Should().Be(testData);
     }
@@ -31,10 +29,9 @@ public class CrossValidationTests
         byte[] original = [];
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[100];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(0);
+        decompressed.Should().BeEmpty();
     }
 
     [Fact]
@@ -43,10 +40,8 @@ public class CrossValidationTests
         byte[] original = [42];
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -59,10 +54,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -75,10 +68,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -91,10 +82,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -106,10 +95,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -130,10 +117,8 @@ public class CrossValidationTests
         byte[] original = Encoding.UTF8.GetBytes(text);
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
         Encoding.UTF8.GetString(decompressed).Should().Be(text);
     }
@@ -153,10 +138,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -174,10 +157,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(original.Length);
         decompressed.Should().Equal(original);
     }
 
@@ -195,10 +176,8 @@ public class CrossValidationTests
 
         byte[] compressed = CompressWithReference(original);
 
-        byte[] decompressed = new byte[size];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
+        byte[] decompressed = StreamCodec.Decode(compressed);
 
-        bytesWritten.Should().Be(size);
         decompressed.Should().Equal(original);
     }
 

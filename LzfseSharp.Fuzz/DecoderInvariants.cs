@@ -1,56 +1,62 @@
 using System;
+using System.IO;
 
 namespace LzfseSharp.Fuzz;
 
 /// <summary>
 /// The decoder's public contract, as enforced by the fuzz harness: for any input,
-/// <see cref="LzfseDecoder.Decompress(Span{byte}, ReadOnlySpan{byte}, out DecompressStatus)"/>
-/// must return normally with a defined status and a byte count in
-/// <c>[0, dst.Length]</c>, and a successful decode must be deterministic. Any
-/// violation is reported by throwing <see cref="InvariantException"/>, which
-/// either the smoke runner reports or the fuzzer registers as a crash.
+/// <see cref="LzfseDecoder.Decompress(Stream, Stream)"/> must either succeed or fail
+/// only with one of its documented exception types
+/// (<see cref="InvalidDataException"/>, <see cref="EndOfStreamException"/>). Any other
+/// exception — or a non-deterministic successful decode — is reported by throwing
+/// <see cref="InvariantException"/>, which the smoke runner reports or the fuzzer
+/// registers as a crash.
 /// </summary>
 internal static class DecoderInvariants
 {
-    public static void Check(byte[] dst, byte[] input)
+    public static void Check(byte[] input)
     {
-        int written;
-        DecompressStatus status;
+        byte[]? output = TryDecode(input, out bool succeeded);
+
+        // A successful decode should be deterministic: re-decoding the same input must
+        // produce the same bytes. Catches hypothetical state leaks across calls.
+        if (succeeded)
+        {
+            byte[]? again = TryDecode(input, out bool succeededAgain);
+            if (!succeededAgain)
+                throw new InvariantException("non-deterministic decode: first decode succeeded, second failed");
+            if (!output.AsSpan().SequenceEqual(again))
+                throw new InvariantException("non-deterministic decode: output differs between identical inputs");
+        }
+    }
+
+    private static byte[]? TryDecode(byte[] input, out bool succeeded)
+    {
+        using MemoryStream source = new(input, writable: false);
+        using MemoryStream destination = new();
 
         try
         {
-            written = LzfseDecoder.Decompress(dst, input, out status);
+            LzfseDecoder.Decompress(source, destination);
+        }
+        catch (InvalidDataException)
+        {
+            succeeded = false;
+            return null;
+        }
+        catch (EndOfStreamException)
+        {
+            succeeded = false;
+            return null;
         }
         catch (Exception ex)
         {
-            // The out-param overload must never throw. The legacy overload may throw
-            // ArgumentException on dst-full, but the out-param overload is documented
-            // as total.
-            throw new InvariantException($"Decompress threw {ex.GetType().Name}: {ex.Message}", ex);
+            // Any exception type other than the two documented failure modes is a bug.
+            throw new InvariantException($"Decompress threw undocumented {ex.GetType().Name}: {ex.Message}", ex);
         }
 
-        if (!Enum.IsDefined(status))
-            throw new InvariantException($"status out of range: {(int)status}");
-
-        if (written < 0 || written > dst.Length)
-            throw new InvariantException($"written ({written}) not in [0, {dst.Length}]");
-
-        // A successful decode should be deterministic: re-decoding the same input
-        // must produce the same bytes. Catches hypothetical state leaks across calls.
-        if (status == DecompressStatus.Ok)
-            VerifyDeterministicDecode(dst, input, written);
-    }
-
-    private static void VerifyDeterministicDecode(byte[] firstOutput, byte[] input, int expectedWritten)
-    {
-        byte[] second = new byte[firstOutput.Length];
-        int writtenAgain = LzfseDecoder.Decompress(second, input, out DecompressStatus statusAgain);
-
-        if (statusAgain != DecompressStatus.Ok || writtenAgain != expectedWritten)
-            throw new InvariantException($"non-deterministic Ok decode: {statusAgain}/{writtenAgain} vs Ok/{expectedWritten}");
-
-        if (!firstOutput.AsSpan(0, expectedWritten).SequenceEqual(second.AsSpan(0, writtenAgain)))
-            throw new InvariantException("non-deterministic Ok decode: output differs");
+        succeeded = true;
+        return destination.ToArray();
     }
 }
 

@@ -17,15 +17,12 @@ public class RoundTripTests
         Array.Copy(compressedBuffer, compressed, compressedSize);
 
         // Decompress with our implementation
-        byte[] decompressed = new byte[original.Length];
-        int bytesWritten = LzfseDecoder.Decompress(decompressed, compressed);
-
-        bytesWritten.Should().Be(original.Length);
+        byte[] decompressed = StreamCodec.Decode(compressed);
         decompressed.Should().Equal(original);
 
-        // The allocating overload must produce the same bytes with no caller sizing.
-        byte[] allocated = LzfseDecoder.Decompress(compressed);
-        allocated.Should().Equal(original);
+        // The async path must produce identical output.
+        byte[] viaAsync = StreamCodec.DecodeAsync(compressed).GetAwaiter().GetResult();
+        viaAsync.Should().Equal(original);
     }
 
     [Theory]
