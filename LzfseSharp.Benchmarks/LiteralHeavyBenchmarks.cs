@@ -17,6 +17,8 @@ public class LiteralHeavyBenchmarks
 {
     private byte[] _compressedData = [];
     private byte[] _decompressedBuffer = [];
+    private MemoryStream _source = new();
+    private MemoryStream _destination = new();
     private int _expectedDecompressedSize;
 
     [Params(256, 1024)]
@@ -40,11 +42,17 @@ public class LiteralHeavyBenchmarks
                 $"Size {DataSizeBytes} may need adjusting.");
 
         _decompressedBuffer = new byte[_expectedDecompressedSize];
+        _source = new MemoryStream(_compressedData, writable: false);
+        _destination = new MemoryStream(_expectedDecompressedSize);
 
-        int bytesWritten = LzfseDecoder.Decompress(_decompressedBuffer, _compressedData);
-        if (bytesWritten != _expectedDecompressedSize)
+        // Reuse the streams across iterations so the benchmark measures decode work,
+        // not allocation. Verify the streaming path produces the expected size.
+        _source.Position = 0;
+        _destination.SetLength(0);
+        LzfseDecoder.Decompress(_source, _destination);
+        if (_destination.Length != _expectedDecompressedSize)
             throw new InvalidOperationException(
-                $"LzfseSharp decompression failed: expected {_expectedDecompressedSize} bytes, got {bytesWritten}");
+                $"LzfseSharp decompression failed: expected {_expectedDecompressedSize} bytes, got {_destination.Length}");
     }
 
     private static byte[] GenerateLzvnFavourableData(int size)
@@ -62,10 +70,12 @@ public class LiteralHeavyBenchmarks
     }
 
     [Benchmark(Baseline = true)]
-    public int LzfseSharp_Decompress()
+    public long LzfseSharp_Decompress()
     {
-        Array.Clear(_decompressedBuffer);
-        return LzfseDecoder.Decompress(_decompressedBuffer, _compressedData);
+        _source.Position = 0;
+        _destination.SetLength(0);
+        LzfseDecoder.Decompress(_source, _destination);
+        return _destination.Length;
     }
 
     [Benchmark]

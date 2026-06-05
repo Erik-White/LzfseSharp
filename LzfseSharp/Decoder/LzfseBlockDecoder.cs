@@ -9,6 +9,31 @@ namespace LzfseSharp.Decoder;
 internal static class LzfseBlockDecoder
 {
     /// <summary>
+    /// Outcome of expanding a single L/M/D triplet into the destination window.
+    /// </summary>
+    private enum MatchResult
+    {
+        /// <summary>
+        /// The literal and match were fully written.
+        /// </summary>
+        Completed,
+
+        /// <summary>
+        /// The destination window filled before the op finished; the outstanding
+        /// literal/match lengths have been written back so the op can resume after
+        /// the caller makes more room.
+        /// </summary>
+        DestinationFull,
+
+        /// <summary>
+        /// The match distance reaches before the start of the available output. This
+        /// is always a malformed stream — distinct from <see cref="DestinationFull"/>
+        /// so the streaming driver does not retry it.
+        /// </summary>
+        InvalidDistance,
+    }
+
+    /// <summary>
     /// Copy data with proper handling of overlapping match copies
     /// </summary>
     private static void Copy(Span<byte> destination, ReadOnlySpan<byte> source, int length)
@@ -38,7 +63,7 @@ internal static class LzfseBlockDecoder
     /// <summary>
     /// Decode L, M, D triplets and expand matches
     /// </summary>
-    public static int DecodeLmd(ref LzfseDecoderState state)
+    public static int DecodeLmd(ref LzfseDecoderState state, ReadOnlySpan<byte> source, Span<byte> destination)
     {
         ref LzfseCompressedBlockDecoderState blockState = ref state.CompressedLzfseBlockState;
         ushort lState = blockState.LState;
@@ -60,16 +85,17 @@ internal static class LzfseBlockDecoder
         // If literalLength or matchLength is non-zero, we have a pending match to complete
         if (literalLength != 0 || matchLength != 0)
         {
-            if (!ExecuteMatch(state, ref blockState, ref destinationPosition, ref literalPosition, ref literalLength, ref matchLength, ref matchDistance, ref remainingBytes))
-            {
+            MatchResult resume = ExecuteMatch(destination, ref blockState, ref destinationPosition, ref literalPosition, ref literalLength, ref matchLength, ref matchDistance, ref remainingBytes);
+            if (resume == MatchResult.InvalidDistance)
+                return Constants.StatusError;
+            if (resume == MatchResult.DestinationFull)
                 return SaveStateAndReturn(ref state, ref blockState, lState, mState, dState, inStream, sourcePosition, literalPosition, destinationPosition, symbols, literalLength, matchLength, matchDistance);
-            }
         }
 
         while (symbols > 0)
         {
             // Decode next L, M, D triplet
-            var flushResult = inStream.Flush(sourcePosition, sourceStart, state.SourceBuffer);
+            var flushResult = inStream.Flush(sourcePosition, sourceStart, source);
             if (flushResult.Status != 0)
                 return Constants.StatusError;
             sourcePosition = flushResult.BufferPtr;
@@ -79,14 +105,14 @@ internal static class LzfseBlockDecoder
             if (literalPosition + literalLength >= LzfseCompressedBlockDecoderState.LiteralsBufferLength)
                 return Constants.StatusError;
 
-            flushResult = inStream.Flush(sourcePosition, sourceStart, state.SourceBuffer);
+            flushResult = inStream.Flush(sourcePosition, sourceStart, source);
             if (flushResult.Status != 0)
                 return Constants.StatusError;
             sourcePosition = flushResult.BufferPtr;
 
             matchLength = FseDecoder.ValueDecode(ref mState, blockState.MDecoder, ref inStream);
 
-            flushResult = inStream.Flush(sourcePosition, sourceStart, state.SourceBuffer);
+            flushResult = inStream.Flush(sourcePosition, sourceStart, source);
             if (flushResult.Status != 0)
                 return Constants.StatusError;
             sourcePosition = flushResult.BufferPtr;
@@ -95,10 +121,11 @@ internal static class LzfseBlockDecoder
             matchDistance = newDistance != 0 ? newDistance : matchDistance;
             symbols--;
 
-            if (!ExecuteMatch(state, ref blockState, ref destinationPosition, ref literalPosition, ref literalLength, ref matchLength, ref matchDistance, ref remainingBytes))
-            {
+            MatchResult result = ExecuteMatch(destination, ref blockState, ref destinationPosition, ref literalPosition, ref literalLength, ref matchLength, ref matchDistance, ref remainingBytes);
+            if (result == MatchResult.InvalidDistance)
+                return Constants.StatusError;
+            if (result == MatchResult.DestinationFull)
                 return SaveStateAndReturn(ref state, ref blockState, lState, mState, dState, inStream, sourcePosition, literalPosition, destinationPosition, symbols, literalLength, matchLength, matchDistance);
-            }
         }
 
         // Block complete
@@ -135,8 +162,8 @@ internal static class LzfseBlockDecoder
         return Constants.StatusDstFull;
     }
 
-    private static bool ExecuteMatch(
-        LzfseDecoderState state,
+    private static MatchResult ExecuteMatch(
+        Span<byte> destination,
         ref LzfseCompressedBlockDecoderState blockState,
         ref int destinationPosition,
         ref int literalPosition,
@@ -145,9 +172,12 @@ internal static class LzfseBlockDecoder
         ref int matchDistance,
         ref long remainingBytes)
     {
-        // Validate match distance: cannot reach before the start of the destination buffer.
+        // Validate match distance: cannot reach before the start of the available output.
+        // destinationPosition is window-relative; the streaming window always retains at
+        // least the maximum encodable distance behind it, so a valid back-reference stays
+        // in range and this only rejects genuinely malformed distances.
         if ((uint)matchDistance > destinationPosition + literalLength)
-            return false;
+            return MatchResult.InvalidDistance;
 
         const int SafetyMargin = 32;
         const int MinDistanceForFastCopy = 8;
@@ -158,23 +188,23 @@ internal static class LzfseBlockDecoder
             remainingBytes -= literalLength + matchLength;
 
             // Copy literal
-            Copy(state.DestinationBuffer[destinationPosition..], blockState.Literals.AsSpan()[literalPosition..], literalLength);
+            Copy(destination[destinationPosition..], blockState.Literals.AsSpan()[literalPosition..], literalLength);
             destinationPosition += literalLength;
             literalPosition += literalLength;
 
             // Copy match
             if (matchDistance >= MinDistanceForFastCopy || matchDistance >= matchLength)
             {
-                Copy(state.DestinationBuffer[destinationPosition..], state.DestinationBuffer[(destinationPosition - matchDistance)..], matchLength);
+                Copy(destination[destinationPosition..], destination[(destinationPosition - matchDistance)..], matchLength);
             }
             else
             {
                 // Overlapping copy for small distances
                 for (int i = 0; i < matchLength; i++)
-                    state.DestinationBuffer[destinationPosition + i] = state.DestinationBuffer[destinationPosition + i - matchDistance];
+                    destination[destinationPosition + i] = destination[destinationPosition + i - matchDistance];
             }
             destinationPosition += matchLength;
-            return true;
+            return MatchResult.Completed;
         }
 
         // Slow path: near end of buffer
@@ -184,7 +214,7 @@ internal static class LzfseBlockDecoder
         if (literalLength <= remainingBytes)
         {
             for (int i = 0; i < literalLength; i++)
-                state.DestinationBuffer[destinationPosition + i] = blockState.Literals[literalPosition + i];
+                destination[destinationPosition + i] = blockState.Literals[literalPosition + i];
             destinationPosition += literalLength;
             literalPosition += literalLength;
             remainingBytes -= literalLength;
@@ -194,18 +224,18 @@ internal static class LzfseBlockDecoder
         {
             int bytesToCopy = (int)remainingBytes;
             for (int i = 0; i < bytesToCopy; i++)
-                state.DestinationBuffer[destinationPosition + i] = blockState.Literals[literalPosition + i];
+                destination[destinationPosition + i] = blockState.Literals[literalPosition + i];
             destinationPosition += bytesToCopy;
             literalPosition += bytesToCopy;
             literalLength -= bytesToCopy;
-            return false; // Destination buffer is full
+            return MatchResult.DestinationFull;
         }
 
         // Copy match
         if (matchLength <= remainingBytes)
         {
             for (int i = 0; i < matchLength; i++)
-                state.DestinationBuffer[destinationPosition + i] = state.DestinationBuffer[destinationPosition + i - matchDistance];
+                destination[destinationPosition + i] = destination[destinationPosition + i - matchDistance];
             destinationPosition += matchLength;
             remainingBytes -= matchLength;
             matchLength = 0;
@@ -214,13 +244,13 @@ internal static class LzfseBlockDecoder
         {
             int bytesToCopy = (int)remainingBytes;
             for (int i = 0; i < bytesToCopy; i++)
-                state.DestinationBuffer[destinationPosition + i] = state.DestinationBuffer[destinationPosition + i - matchDistance];
+                destination[destinationPosition + i] = destination[destinationPosition + i - matchDistance];
             destinationPosition += bytesToCopy;
             matchLength -= bytesToCopy;
-            return false; // Destination buffer is full
+            return MatchResult.DestinationFull;
         }
 
         remainingBytes -= SafetyMargin;
-        return true;
+        return MatchResult.Completed;
     }
 }

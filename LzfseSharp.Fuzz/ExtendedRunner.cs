@@ -63,16 +63,15 @@ internal static class ExtendedRunner
         for (int i = 0; i < iterations; i++)
         {
             byte[] input = InputGenerator.Generate(rng);
-            byte[] dst = new byte[rng.Next(1, 4096)];
 
             try
             {
-                DecoderInvariants.Check(dst, input);
+                DecoderInvariants.Check(input);
             }
             catch (Exception ex)
             {
                 failures++;
-                ReportFailure(seed, i, input, dst.Length, ex);
+                ReportFailure(seed, i, input, ex);
                 if (failures >= MaxFailuresBeforeAbort)
                     break;
             }
@@ -90,13 +89,12 @@ internal static class ExtendedRunner
         return failures;
     }
 
-    private static void ReportFailure(int seed, int iteration, byte[] input, int dstSize, Exception ex)
+    private static void ReportFailure(int seed, int iteration, byte[] input, Exception ex)
     {
         Console.Error.WriteLine($"[seed {seed} iter {iteration}] invariant violated: {ex.GetType().Name}: {ex.Message}");
         int previewLength = Math.Min(64, input.Length);
         string preview = BitConverter.ToString(input, 0, previewLength);
         string ellipsis = input.Length > previewLength ? "..." : "";
         Console.Error.WriteLine($"  input ({input.Length} bytes): {preview}{ellipsis}");
-        Console.Error.WriteLine($"  dst size: {dstSize}");
     }
 }

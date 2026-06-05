@@ -32,6 +32,11 @@ internal static class Constants
     public const int MatchesPerBlock = 10000;
     public const int LiteralsPerBlock = 4 * MatchesPerBlock;
 
+    // Upper bound on the on-wire payload of a single block that the decoder must hold
+    // resident at once (the LZVN payload, and the V1/V2 literal + LMD payloads, which are
+    // bit-streams read backwards from their end).
+    public const int MaxBlockPayloadBytes = 64 * 1024 * 1024;
+
     // Block header sizes
     public const int UncompressedBlockHeaderSize = 8;
     public const int LzvnCompressedBlockHeaderSize = 12;

@@ -28,16 +28,6 @@ internal static class BlockHeaderParser
         int HeaderSize,
         int Status);
 
-    /// <summary>
-    /// Describes the structural layout of a block as seen by the header scanner:
-    /// which block type it is, how much raw (decompressed) output it contributes,
-    /// and the total on-wire length including header and payload.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="BlockLength"/> is zero for the end-of-stream block.
-    /// </remarks>
-    internal readonly record struct BlockLayout(uint Magic, uint RawBytes, long BlockLength);
-
     public static uint ReadMagic(ReadOnlySpan<byte> src) => MemoryOperations.Load4(src);
 
     /// <summary>
@@ -58,72 +48,6 @@ internal static class BlockHeaderParser
         uint rawBytes = MemoryOperations.Load4(src[4..]);
         uint payloadBytes = MemoryOperations.Load4(src[8..]);
         return (rawBytes, payloadBytes);
-    }
-
-    /// <summary>
-    /// Returns the next block's layout (magic, raw-byte contribution, total block length
-    /// on the wire). Used by the pre-scan that sizes the output buffer without decoding
-    /// payloads. Throws <see cref="InvalidDataException"/> on truncation, invalid magic,
-    /// or malformed V2 header — callers that want a status-based API should use the
-    /// span-based <see cref="LzfseDecoder.Decompress(System.Span{byte}, System.ReadOnlySpan{byte}, out DecompressStatus)"/>.
-    /// </summary>
-    public static BlockLayout ReadBlockLayout(ReadOnlySpan<byte> src, int pos)
-    {
-        if (pos + 4 > src.Length)
-            throw new InvalidDataException("LZFSE stream is truncated: missing block magic.");
-
-        uint magic = ReadMagic(src[pos..]);
-
-        if (magic == Constants.EndOfStreamBlockMagic)
-            return new BlockLayout(magic, RawBytes: 0, BlockLength: 0);
-
-        // Every remaining block type begins with { magic(4), n_raw_bytes(4), ... }.
-        if (pos + 8 > src.Length)
-            throw new InvalidDataException("LZFSE stream is truncated: incomplete block header.");
-
-        uint rawBytes = MemoryOperations.Load4(src[(pos + 4)..]);
-
-        long blockLength = magic switch
-        {
-            Constants.UncompressedBlockMagic => Constants.UncompressedBlockHeaderSize + rawBytes,
-            Constants.CompressedLzvnBlockMagic => ReadLzvnBlockLength(src, pos),
-            Constants.CompressedV1BlockMagic => ReadV1BlockLength(src, pos),
-            Constants.CompressedV2BlockMagic => ReadV2BlockLength(src, pos),
-            _ => throw new InvalidDataException($"LZFSE stream has invalid block magic 0x{magic:X8}.")
-        };
-
-        return new BlockLayout(magic, rawBytes, blockLength);
-
-        static long ReadLzvnBlockLength(ReadOnlySpan<byte> src, int pos)
-        {
-            if (pos + Constants.LzvnCompressedBlockHeaderSize > src.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete LZVN block header.");
-            uint payloadBytes = MemoryOperations.Load4(src[(pos + 8)..]);
-            return Constants.LzvnCompressedBlockHeaderSize + payloadBytes;
-        }
-
-        static long ReadV1BlockLength(ReadOnlySpan<byte> src, int pos)
-        {
-            if (pos + Constants.V1HeaderSize > src.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete V1 block header.");
-            uint nLiteralPayload = MemoryOperations.Load4(src[(pos + 20)..]);
-            uint nLmdPayload = MemoryOperations.Load4(src[(pos + 24)..]);
-            return (long)Constants.V1HeaderSize + nLiteralPayload + nLmdPayload;
-        }
-
-        static long ReadV2BlockLength(ReadOnlySpan<byte> src, int pos)
-        {
-            if (pos + Constants.V2FixedHeaderSize > src.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: incomplete V2 block header.");
-
-            // Reuse the real header parser so we apply the same validation (declared
-            // header size bounds, freq-table bit stream) that DecodeInternal will.
-            var result = DecodeV2ToV1(src[pos..]);
-            if (result.Status != 0)
-                throw new InvalidDataException("LZFSE V2 block header is malformed.");
-
-            return (long)result.HeaderSize + result.Header.NLiteralPayloadBytes + result.Header.NLmdPayloadBytes;
-        }
     }
 
     /// <summary>

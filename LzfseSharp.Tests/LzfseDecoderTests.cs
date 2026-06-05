@@ -8,98 +8,55 @@ namespace LzfseSharp.Tests;
 public class LzfseDecoderTests
 {
     [Fact]
-    public void Decompress_EmptyInput_ReturnsZero()
+    public void Decompress_EmptyInput_Throws()
     {
-        Span<byte> dst = new byte[100];
-        ReadOnlySpan<byte> src = [];
+        // No bytes at all: the source ends before even a block magic, let alone the
+        // end-of-stream marker.
+        Action act = () => StreamCodec.Decode([]);
 
-        int result = LzfseDecoder.Decompress(dst, src);
-
-        result.Should().Be(0);
+        act.Should().Throw<EndOfStreamException>();
     }
 
     [Fact]
-    public void Decompress_EmptyOutput_ReturnsZero()
+    public void Decompress_EndOfStreamBlock_ProducesEmptyOutput()
     {
-        Span<byte> dst = [];
-        ReadOnlySpan<byte> src = new byte[10];
-
-        int result = LzfseDecoder.Decompress(dst, src);
-
-        result.Should().Be(0);
-    }
-
-    [Fact]
-    public void Decompress_EndOfStreamBlock_ReturnsZero()
-    {
-        Span<byte> dst = new byte[100];
         // End of stream magic: 0x62767824 (little-endian: 24 78 76 62 = "bvx$")
-        ReadOnlySpan<byte> src = [0x62, 0x76, 0x78, 0x24];
+        byte[] result = StreamCodec.Decode([0x62, 0x76, 0x78, 0x24]);
 
-        int result = LzfseDecoder.Decompress(dst, src);
-
-        result.Should().Be(0);
+        result.Should().BeEmpty();
     }
 
     [Fact]
     public void Decompress_UncompressedBlock_CopiesData()
     {
-        Span<byte> dst = new byte[100];
-
-        // Create uncompressed block:
-        // Magic: 0x62767824 (little-endian: 2d 78 76 62 = "bvx-")
-        // n_raw_bytes: 5 (little-endian: 05 00 00 00)
-        // Data: "Hello"
-        byte[] srcBytes = [
-            0x62, 0x76, 0x78, 0x2d,  // Magic: bvx-
-            0x05, 0x00, 0x00, 0x00,  // n_raw_bytes: 5
-            0x48, 0x65, 0x6c, 0x6c, 0x6f,  // "Hello"
-            0x62, 0x76, 0x78, 0x24   // End of stream magic
-        ];
-        ReadOnlySpan<byte> src = srcBytes;
-
-        int result = LzfseDecoder.Decompress(dst, src);
-
-        result.Should().Be(5);
-        Encoding.ASCII.GetString(dst[..5]).Should().Be("Hello");
-    }
-
-    [Fact]
-    public void Decompress_DestinationTooSmall_ThrowsArgumentException()
-    {
-        byte[] dstBytes = new byte[3];
-        byte[] srcBytes = [
+        // Magic: bvx-, n_raw_bytes: 5, data "Hello", then end of stream.
+        byte[] src = [
             0x62, 0x76, 0x78, 0x2d,  // Magic: bvx-
             0x05, 0x00, 0x00, 0x00,  // n_raw_bytes: 5
             0x48, 0x65, 0x6c, 0x6c, 0x6f,  // "Hello"
             0x62, 0x76, 0x78, 0x24   // End of stream magic
         ];
 
-        var ex = Assert.Throws<ArgumentException>(() => LzfseDecoder.Decompress(dstBytes, srcBytes));
-        ex.ParamName.Should().Be("dstBuffer");
+        byte[] result = StreamCodec.Decode(src);
+
+        Encoding.ASCII.GetString(result).Should().Be("Hello");
     }
 
     [Fact]
-    public void Decompress_InvalidMagic_ReturnsZero()
+    public void Decompress_InvalidMagic_Throws()
     {
-        Span<byte> dst = new byte[100];
-        ReadOnlySpan<byte> src = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
+        Action act = () => StreamCodec.Decode([0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00]);
 
-        int result = LzfseDecoder.Decompress(dst, src);
-
-        result.Should().Be(0);
+        act.Should().Throw<InvalidDataException>();
     }
 
     [Fact]
-    public void Decompress_TruncatedHeader_ReturnsZero()
+    public void Decompress_TruncatedHeader_Throws()
     {
-        Span<byte> dst = new byte[100];
-        // Uncompressed block magic but missing n_raw_bytes field
-        ReadOnlySpan<byte> src = [0x62, 0x76, 0x78, 0x2d];
+        // Uncompressed block magic but missing the n_raw_bytes field.
+        Action act = () => StreamCodec.Decode([0x62, 0x76, 0x78, 0x2d]);
 
-        int result = LzfseDecoder.Decompress(dst, src);
-
-        result.Should().Be(0);
+        act.Should().Throw<EndOfStreamException>();
     }
 
     [Fact]
@@ -107,11 +64,9 @@ public class LzfseDecoderTests
     {
         // Regression guard for the CopyLiteralBytes fast path: when L <= 3 and
         // destinationLength >= 4, it stores 4 bytes and advances by L, leaving
-        // 4-L "overshoot" bytes in dst past the logical write position. The outer
-        // framer's DestinationEnd clamp should prevent those bytes from leaking
-        // into the logical output of a subsequent block. This test verifies that
-        // a small-literal LZVN block followed by an uncompressed block produces
-        // exactly the expected bytes, with no corruption from the overshoot.
+        // 4-L "overshoot" bytes past the logical write position. The outer framer's
+        // DestinationEnd clamp must prevent those bytes from leaking into the logical
+        // output of a subsequent block.
 
         // Block 1 (LZVN): small-literal opcode 0xe2 (L=2) + "AB" + 8-byte EOS
         byte[] lzvnPayload = new byte[1 + 2 + 8];
@@ -137,11 +92,9 @@ public class LzfseDecoderTests
         // End of stream
         MemoryOperations.Store4(stream.AsSpan(p), Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[4];
-        int result = LzfseDecoder.Decompress(dst, stream);
+        byte[] result = StreamCodec.Decode(stream);
 
-        result.Should().Be(4);
-        dst.Should().Equal((byte)'A', (byte)'B', (byte)'Y', (byte)'Z');
+        result.Should().Equal((byte)'A', (byte)'B', (byte)'Y', (byte)'Z');
     }
 
     [Theory]
@@ -149,27 +102,25 @@ public class LzfseDecoderTests
     [InlineData(29)]
     [InlineData(30)]
     [InlineData(31)]
-    public void Decompress_V2BlockWithIncompleteFixedHeader_ReportsTruncated(int totalLength)
+    public void Decompress_V2BlockWithIncompleteFixedHeader_Throws(int totalLength)
     {
         byte[] stream = new byte[totalLength];
         MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
         // Remaining bytes are zeros — their contents don't matter; the outer bounds
         // check must reject before they're read.
 
-        byte[] dst = new byte[100];
-        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(stream);
 
-        status.Should().NotBe(DecompressStatus.Ok,
+        act.Should().Throw<EndOfStreamException>(
             "a truncated V2 fixed header must be rejected, never accepted");
     }
 
     [Fact]
-    public void Decompress_V2BlockWithInflatedHeaderSize_ReportsMalformed()
+    public void Decompress_V2BlockWithInflatedHeaderSize_ThrowsInvalidData()
     {
         // DecodeV2ToV1 reads the "header_size" field from packed_fields[2] bits 0..31.
         // A crafted stream can set this arbitrarily; the decoder must reject it rather
-        // than run off the end of its input buffer. Before the guard, this caused an
-        // IndexOutOfRangeException in the freq-table refill loop.
+        // than run off the end of its input buffer.
         byte[] stream = new byte[32 + 4];  // fixed V2 header + EOS magic, no freq data
         MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
         MemoryOperations.Store4(stream.AsSpan(4), 0); // n_raw_bytes = 0
@@ -180,15 +131,14 @@ public class LzfseDecoderTests
 
         MemoryOperations.Store4(stream.AsSpan(32), Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[100];
-        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(stream);
 
-        status.Should().Be(DecompressStatus.Malformed,
+        act.Should().Throw<InvalidDataException>(
             "a V2 header claiming more bytes than the stream provides must be reported as malformed, not crash");
     }
 
     [Fact]
-    public void Decompress_V2BlockWithUndersizedHeaderSize_ReportsMalformed()
+    public void Decompress_V2BlockWithUndersizedHeaderSize_ThrowsInvalidData()
     {
         // Inverse case: declaredHeaderSize < 32 (the fixed header size). Should reject
         // up-front rather than enter the freq loop with sourcePosition (32) > sourceEnd.
@@ -201,40 +151,13 @@ public class LzfseDecoderTests
 
         MemoryOperations.Store4(stream.AsSpan(32), Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[100];
-        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(stream);
 
-        status.Should().Be(DecompressStatus.Malformed);
+        act.Should().Throw<InvalidDataException>();
     }
 
     [Fact]
-    public void DecompressAllocating_EndOfStreamOnly_ReturnsEmptyArray()
-    {
-        ReadOnlySpan<byte> src = [0x62, 0x76, 0x78, 0x24];
-
-        byte[] result = LzfseDecoder.Decompress(src);
-
-        result.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void DecompressAllocating_UncompressedBlock_ReturnsExactSizeArray()
-    {
-        byte[] src = [
-            0x62, 0x76, 0x78, 0x2d,              // bvx-
-            0x05, 0x00, 0x00, 0x00,              // n_raw_bytes: 5
-            0x48, 0x65, 0x6c, 0x6c, 0x6f,        // "Hello"
-            0x62, 0x76, 0x78, 0x24               // EOS
-        ];
-
-        byte[] result = LzfseDecoder.Decompress(src);
-
-        result.Should().HaveCount(5);
-        Encoding.ASCII.GetString(result).Should().Be("Hello");
-    }
-
-    [Fact]
-    public void DecompressAllocating_MultipleUncompressedBlocks_ConcatenatesRawBytes()
+    public void Decompress_MultipleUncompressedBlocks_ConcatenatesRawBytes()
     {
         byte[] src = [
             0x62, 0x76, 0x78, 0x2d, 0x03, 0x00, 0x00, 0x00, (byte)'A', (byte)'B', (byte)'C',
@@ -242,38 +165,13 @@ public class LzfseDecoderTests
             0x62, 0x76, 0x78, 0x24
         ];
 
-        byte[] result = LzfseDecoder.Decompress(src);
+        byte[] result = StreamCodec.Decode(src);
 
         Encoding.ASCII.GetString(result).Should().Be("ABCDE");
     }
 
     [Fact]
-    public void DecompressAllocating_EmptyInput_Throws()
-    {
-        ReadOnlySpan<byte> src = [];
-
-        try
-        {
-            _ = LzfseDecoder.Decompress(src);
-            Assert.Fail("Expected InvalidDataException");
-        }
-        catch (System.IO.InvalidDataException)
-        {
-        }
-    }
-
-    [Fact]
-    public void DecompressAllocating_InvalidMagic_Throws()
-    {
-        byte[] src = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
-
-        Action act = () => LzfseDecoder.Decompress(src);
-
-        act.Should().Throw<System.IO.InvalidDataException>();
-    }
-
-    [Fact]
-    public void DecompressAllocating_TruncatedUncompressedPayload_Throws()
+    public void Decompress_TruncatedUncompressedPayload_Throws()
     {
         byte[] src = [
             0x62, 0x76, 0x78, 0x2d,
@@ -281,13 +179,13 @@ public class LzfseDecoderTests
             0x48, 0x65                           // only 2 of the 5 declared bytes
         ];
 
-        Action act = () => LzfseDecoder.Decompress(src);
+        Action act = () => StreamCodec.Decode(src);
 
-        act.Should().Throw<System.IO.InvalidDataException>();
+        act.Should().Throw<EndOfStreamException>();
     }
 
     [Fact]
-    public void DecompressAllocating_MissingEndOfStream_Throws()
+    public void Decompress_MissingEndOfStream_Throws()
     {
         byte[] src = [
             0x62, 0x76, 0x78, 0x2d,
@@ -296,31 +194,49 @@ public class LzfseDecoderTests
             // no EOS block
         ];
 
-        Action act = () => LzfseDecoder.Decompress(src);
+        Action act = () => StreamCodec.Decode(src);
 
-        act.Should().Throw<System.IO.InvalidDataException>();
+        act.Should().Throw<EndOfStreamException>();
     }
 
     [Fact]
-    public void DecompressAllocating_DeclaredSizeExceedsInt32_Throws()
+    public void Decompress_DeclaredSizeExceedsInt32_DecodesUntilTruncation()
     {
-        // LZVN block header claims 2^31 raw bytes; scan must reject before attempting
-        // to allocate a negative-sized (or wrap-around) byte[]. Payload is a short
-        // filler — scan never reads it, it just walks past the declared payload length.
+        // LZVN block header claims 2^31 raw bytes but only a short payload follows.
+        // The streaming decoder no longer pre-scans the total size, so it simply
+        // decodes what it can and then reports the truncated stream.
         byte[] stream = new byte[12 + 4 + 4];
         MemoryOperations.Store4(stream, Constants.CompressedLzvnBlockMagic);
         MemoryOperations.Store4(stream.AsSpan(4), 0x80000000u);    // n_raw_bytes = 2^31
         MemoryOperations.Store4(stream.AsSpan(8), 4);              // payload_bytes = 4
-        // 4 bytes of payload filler (contents don't matter — scan skips them)
         MemoryOperations.Store4(stream.AsSpan(16), Constants.EndOfStreamBlockMagic);
 
-        Action act = () => LzfseDecoder.Decompress(stream);
+        Action act = () => StreamCodec.Decode(stream);
 
-        act.Should().Throw<System.IO.InvalidDataException>();
+        act.Should().Throw<Exception>().Which.Should().Match(
+            e => e is InvalidDataException || e is EndOfStreamException);
     }
 
     [Fact]
-    public void DecompressAllocating_V2HeaderWithInflatedSize_Throws()
+    public void Decompress_LzvnBlockWithOversizedDeclaredPayload_ThrowsInvalidData()
+    {
+        // A bvxn header declaring a payload larger than MaxBlockPayloadBytes must be
+        // rejected as malformed, not drive the source buffer to grow without bound (which
+        // would exhaust memory and eventually throw an undocumented overflow exception)
+        // while it waits for bytes that will never arrive.
+        byte[] stream = new byte[12 + 4];
+        MemoryOperations.Store4(stream, Constants.CompressedLzvnBlockMagic);
+        MemoryOperations.Store4(stream.AsSpan(4), 16);   // n_raw_bytes
+        MemoryOperations.Store4(stream.AsSpan(8), (uint)Constants.MaxBlockPayloadBytes + 1);
+        MemoryOperations.Store4(stream.AsSpan(12), Constants.EndOfStreamBlockMagic);
+
+        Action act = () => StreamCodec.Decode(stream);
+
+        act.Should().Throw<InvalidDataException>();
+    }
+
+    [Fact]
+    public void Decompress_V2HeaderWithInflatedSize_Throws()
     {
         byte[] src = new byte[32 + 4];
         MemoryOperations.Store4(src, Constants.CompressedV2BlockMagic);
@@ -328,43 +244,34 @@ public class LzfseDecoderTests
         MemoryOperations.Store8(src.AsSpan(24), packedField2);
         MemoryOperations.Store4(src.AsSpan(32), Constants.EndOfStreamBlockMagic);
 
-        Action act = () => LzfseDecoder.Decompress(src);
+        Action act = () => StreamCodec.Decode(src);
 
-        act.Should().Throw<System.IO.InvalidDataException>();
+        act.Should().Throw<InvalidDataException>();
     }
 
     [Fact]
-    public void DecompressAllocating_V2BlockWithCorruptFreqBits_Throws()
+    public void Decompress_V2BlockWithCorruptFreqBits_ThrowsInvalidData()
     {
-        // Build a V2 block whose fixed 32-byte header passes outer bounds checks
+        // A V2 block whose fixed 32-byte header passes outer bounds checks
         // (declared header_size = 33 is in range) but whose 1-byte freq-table bit
-        // stream can't supply enough bits for all 360 freq symbols. This exercises
-        // the scan-phase failure path where BlockHeaderParser.DecodeV2ToV1 returns
-        // Status != 0 and ReadV2BlockLength throws InvalidDataException — before
-        // the decode phase ever runs.
+        // stream can't supply enough bits for all 360 freq symbols.
         const int declaredHeaderSize = 33;
         byte[] stream = new byte[declaredHeaderSize + 4];
 
         MemoryOperations.Store4(stream, Constants.CompressedV2BlockMagic);
         MemoryOperations.Store4(stream.AsSpan(4), 0);                 // n_raw_bytes
-        // packed_fields[0] and [1] left zero (no literals, no matches, no payload)
         MemoryOperations.Store8(stream.AsSpan(24), (ulong)declaredHeaderSize); // packed_fields[2]: header_size in bits [0:31]
         stream[32] = 0x00;                                            // 1 byte of freq data — not enough for 360 symbols
 
         MemoryOperations.Store4(stream.AsSpan(33), Constants.EndOfStreamBlockMagic);
 
-        // Span overload: decode-phase malformed detection.
-        byte[] dst = new byte[100];
-        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
-        status.Should().Be(DecompressStatus.Malformed);
+        Action act = () => StreamCodec.Decode(stream);
 
-        // Allocating overload: scan-phase rejection via InvalidDataException.
-        Action act = () => LzfseDecoder.Decompress(stream);
-        act.Should().Throw<System.IO.InvalidDataException>();
+        act.Should().Throw<InvalidDataException>();
     }
 
     [Fact]
-    public void DecompressAllocating_RoundTripMatchesBufferOverload()
+    public async Task DecompressAsync_MatchesSyncOutput()
     {
         byte[] stream = [
             0x62, 0x76, 0x78, 0x2d, 0x05, 0x00, 0x00, 0x00,
@@ -372,21 +279,18 @@ public class LzfseDecoderTests
             0x62, 0x76, 0x78, 0x24
         ];
 
-        byte[] viaAllocating = LzfseDecoder.Decompress(stream);
+        byte[] viaSync = StreamCodec.Decode(stream);
+        byte[] viaAsync = await StreamCodec.DecodeAsync(stream);
 
-        byte[] viaBuffer = new byte[viaAllocating.Length];
-        int written = LzfseDecoder.Decompress(viaBuffer, stream, out DecompressStatus status);
-
-        status.Should().Be(DecompressStatus.Ok);
-        written.Should().Be(viaAllocating.Length);
-        viaBuffer.Should().Equal(viaAllocating);
+        viaAsync.Should().Equal(viaSync);
+        Encoding.ASCII.GetString(viaAsync).Should().Be("Hello");
     }
 
     [Fact]
-    public void Decompress_LzvnBlockWithTruncatedEosMarker_ReportsNonOk()
+    public void Decompress_LzvnBlockWithTruncatedEosMarker_Throws()
     {
-        // Build a bvxn block whose payload is just {0x06}. PayloadByteCount = 1,
-        // so the outer bounds check is satisfied, but the 8-byte EOS marker is truncated.
+        // A bvxn block whose payload is just {0x06}. PayloadByteCount = 1, so the outer
+        // bounds check is satisfied, but the 8-byte EOS marker is truncated.
         byte[] stream = new byte[12 + 1 + 4];
         MemoryOperations.Store4(stream, Constants.CompressedLzvnBlockMagic);
         MemoryOperations.Store4(stream.AsSpan(4), 8); // claim 8 raw bytes
@@ -394,9 +298,27 @@ public class LzfseDecoderTests
         stream[12] = 0x06; // truncated EOS
         MemoryOperations.Store4(stream.AsSpan(13), Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[100];
-        LzfseDecoder.Decompress(dst, stream, out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(stream);
 
-        status.Should().NotBe(DecompressStatus.Ok, "a truncated EOS marker is not a successful decode");
+        act.Should().Throw<Exception>("a truncated EOS marker is not a successful decode")
+            .Which.Should().Match(e => e is InvalidDataException || e is EndOfStreamException);
+    }
+
+    [Fact]
+    public void Decompress_NullSource_Throws()
+    {
+        using MemoryStream destination = new();
+        Action act = () => LzfseDecoder.Decompress(null!, destination);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Decompress_NullDestination_Throws()
+    {
+        using MemoryStream source = new([0x62, 0x76, 0x78, 0x24]);
+        Action act = () => LzfseDecoder.Decompress(source, null!);
+
+        act.Should().Throw<ArgumentNullException>();
     }
 }

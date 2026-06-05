@@ -40,11 +40,9 @@ public class MultiBlockTests
 
         AppendUint32(stream, Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[10];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray());
+        byte[] result = StreamCodec.Decode(stream.ToArray());
 
-        result.Should().Be(10);
-        dst.Should().Equal("HelloWorld"u8.ToArray());
+        result.Should().Equal("HelloWorld"u8.ToArray());
     }
 
     [Fact]
@@ -56,28 +54,9 @@ public class MultiBlockTests
         AppendUint32(stream, 0);
         AppendUint32(stream, Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[16];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray());
+        byte[] result = StreamCodec.Decode(stream.ToArray());
 
-        result.Should().Be(0);
-    }
-
-    [Fact]
-    public void Decompress_OversizedDestinationBuffer_ReturnsActualSize()
-    {
-        // Caller allocated more dst than the stream actually produces. The public API
-        // (LzfseDecoder.Decompress) must report the logical size, not the buffer size.
-        List<byte> stream = new();
-        AppendUint32(stream, Constants.UncompressedBlockMagic);
-        AppendUint32(stream, 3);
-        stream.AddRange("abc"u8.ToArray());
-        AppendUint32(stream, Constants.EndOfStreamBlockMagic);
-
-        byte[] dst = new byte[1024];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray());
-
-        result.Should().Be(3);
-        dst[..3].ToArray().Should().Equal("abc"u8.ToArray());
+        result.Should().BeEmpty();
     }
 
     [Fact]
@@ -90,11 +69,9 @@ public class MultiBlockTests
         stream.Add((byte)'Z');
         AppendUint32(stream, Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[4];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray());
+        byte[] result = StreamCodec.Decode(stream.ToArray());
 
-        result.Should().Be(1);
-        dst[0].Should().Be((byte)'Z');
+        result.Should().Equal((byte)'Z');
     }
 
     [Fact]
@@ -124,15 +101,13 @@ public class MultiBlockTests
 
         AppendUint32(stream, Constants.EndOfStreamBlockMagic);
 
-        byte[] dst = new byte[12];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray());
+        byte[] result = StreamCodec.Decode(stream.ToArray());
 
-        result.Should().Be(12);
-        dst.Should().Equal("AAAABBBBCCCC"u8.ToArray());
+        result.Should().Equal("AAAABBBBCCCC"u8.ToArray());
     }
 
     [Fact]
-    public void Decompress_StreamMissingEosMagic_ReportsTruncated()
+    public void Decompress_StreamMissingEosMagic_Throws()
     {
         // Valid uncompressed block with no trailing bvx$ marker.
         List<byte> stream = new();
@@ -141,11 +116,9 @@ public class MultiBlockTests
         stream.AddRange("xyz"u8.ToArray());
         // No EOS — source is truncated from the decoder's perspective.
 
-        byte[] dst = new byte[16];
-        int result = LzfseDecoder.Decompress(dst, stream.ToArray(), out DecompressStatus status);
+        Action act = () => StreamCodec.Decode(stream.ToArray());
 
-        status.Should().Be(DecompressStatus.SourceTruncated, "a stream without bvx$ terminator is truncated");
-        result.Should().Be(3, "the uncompressed block before the missing EOS was written to dst");
+        act.Should().Throw<EndOfStreamException>("a stream without bvx$ terminator is truncated");
     }
 
     private static void AppendUint32(List<byte> buffer, uint value)

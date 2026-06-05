@@ -7,146 +7,171 @@ namespace LzfseSharp;
 /// <summary>
 /// Main LZFSE decoder providing the public API for decompressing LZFSE-compressed data.
 /// </summary>
+/// <remarks>
+/// The decoder is fully stream based: it reads compressed input from a source
+/// <see cref="Stream"/> one block at a time and writes decompressed output to a
+/// destination <see cref="Stream"/> through a bounded sliding window. Memory use is
+/// independent of the (de)compressed length — it is governed by the largest single
+/// block in the input and the fixed-size output window.
+/// </remarks>
 public static class LzfseDecoder
 {
     /// <summary>
-    /// Decompresses LZFSE-compressed data and returns a correctly sized buffer of the decoded output.
+    /// Decompresses LZFSE-compressed data, reading from <paramref name="source"/> and
+    /// writing the decompressed output to <paramref name="destination"/>.
     /// </summary>
-    /// <param name="srcBuffer">Source buffer containing compressed data.</param>
-    /// <returns>
-    /// A newly allocated array whose length equals the decompressed size declared by the stream.
-    /// Returns an empty array when the stream contains only an end-of-stream marker.
-    /// </returns>
-    /// <exception cref="InvalidDataException">The stream is truncated or malformed.</exception>
-    /// <remarks>
-    /// The decoder pre-scans the block headers to determine the exact decompressed size, then
-    /// performs a single decode pass into an exact-fit buffer.
-    /// </remarks>
-    public static byte[] Decompress(ReadOnlySpan<byte> srcBuffer)
+    /// <param name="source">Stream positioned at the start of the LZFSE-compressed data.</param>
+    /// <param name="destination">Stream that the decompressed bytes are written to.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> or <paramref name="destination"/> is null.</exception>
+    /// <exception cref="EndOfStreamException">The source ended before the end-of-stream marker was reached.</exception>
+    /// <exception cref="InvalidDataException">The compressed data is malformed.</exception>
+    public static void Decompress(Stream source, Stream destination)
     {
-        int size = ScanDecompressedSize(srcBuffer);
-        if (size == 0)
-            return [];
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
 
-        byte[] result = new byte[size];
-        int written = Decompress(result, srcBuffer, out DecompressStatus status);
-
-        if (status != DecompressStatus.Ok)
-            throw new InvalidDataException($"LZFSE decode failed with status {status}.");
-
-        // The pre-scan summed the declared n_raw_bytes across blocks; a successful decode
-        // must produce exactly that many bytes. A mismatch means scan and decode disagree
-        // on the stream contents, which should not be possible for a well-formed stream.
-        if (written != size)
-            throw new InvalidDataException(
-                $"LZFSE decode produced {written} bytes but the stream headers declared {size}.");
-
-        return result;
-    }
-
-    /// <summary>
-    /// Decompresses LZFSE-compressed data from source buffer to destination buffer.
-    /// </summary>
-    /// <param name="dstBuffer">Destination buffer for decompressed data</param>
-    /// <param name="srcBuffer">Source buffer containing compressed data</param>
-    /// <returns>
-    /// The number of bytes written to the destination buffer. 0 when
-    /// the source was empty, destination was empty, source was truncated, or the stream was malformed.
-    /// </returns>
-    /// <exception cref="ArgumentException">The destination buffer is too small to hold the decompressed output.</exception>
-    public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer)
-    {
-        int written = Decompress(dstBuffer, srcBuffer, out DecompressStatus status);
-        if (status == DecompressStatus.DestinationFull)
-            throw new ArgumentException("The destination buffer is too small to hold the decompressed output.", nameof(dstBuffer));
-        return written;
-    }
-
-    /// <summary>
-    /// Decompresses LZFSE-compressed data from source buffer to destination buffer
-    /// </summary>
-    /// <param name="dstBuffer">Destination buffer for decompressed data.</param>
-    /// <param name="srcBuffer">Source buffer containing compressed data.</param>
-    /// <param name="status">Set to indicate whether decoding completed, the source was truncated, the destination was too small, or the stream was malformed.</param>
-    /// <returns>
-    /// The number of bytes written to the destination buffer. May be less than the
-    /// stream's uncompressed size when <paramref name="status"/> is <see cref="DecompressStatus.DestinationFull"/>.
-    /// </returns>
-    public static int Decompress(Span<byte> dstBuffer, ReadOnlySpan<byte> srcBuffer, out DecompressStatus status)
-    {
-        if (srcBuffer.Length == 0 || dstBuffer.Length == 0)
-        {
-            status = DecompressStatus.SourceTruncated;
-            return 0;
-        }
-
+        SourceBuffer sourceBuffer = new();
+        OutputWindow window = new();
         LzfseDecoderState state = default;
-        state.SourceBuffer = srcBuffer;
-        state.DestinationBuffer = dstBuffer;
-        state.SourceEnd = srcBuffer.Length;
-        state.DestinationEnd = dstBuffer.Length;
         state.BlockMagic = Constants.NoBlockMagic;
         state.CompressedLzfseBlockState = LzfseCompressedBlockDecoderState.Rent();
 
-        int result;
         try
         {
-            result = DecodeInternal(ref state);
+            while (true)
+            {
+                int status = DecodePass(ref state, sourceBuffer, window);
+
+                switch (status)
+                {
+                    case Constants.StatusOk:
+                        window.FlushRemaining(destination);
+                        return;
+
+                    case Constants.StatusSrcEmpty:
+                        sourceBuffer.Position = state.SourcePosition;
+                        bool gotMore = sourceBuffer.Fill(source);
+                        state.SourcePosition = sourceBuffer.Position;
+                        if (!gotMore)
+                            throw new EndOfStreamException("LZFSE stream ended before the end-of-stream marker.");
+                        break;
+
+                    case Constants.StatusDstFull:
+                    {
+                        int freed = window.Flush(destination);
+                        // A legitimate destination-full only happens when the window has
+                        // filled past RetainBytes, so the flush always frees space. Zero
+                        // freed bytes means the decoder yielded without progress on a block
+                        // whose declared size it cannot satisfy — a malformed stream.
+                        if (freed == 0)
+                            throw new InvalidDataException("The compressed data is not valid LZFSE.");
+                        state.DestinationPosition -= freed;
+                        break;
+                    }
+
+                    default:
+                        throw new InvalidDataException("The compressed data is not valid LZFSE.");
+                }
+            }
         }
         finally
         {
             state.CompressedLzfseBlockState.Return();
+            window.Return();
+            sourceBuffer.Return();
         }
-
-        status = result switch
-        {
-            Constants.StatusOk => DecompressStatus.Ok,
-            Constants.StatusSrcEmpty => DecompressStatus.SourceTruncated,
-            Constants.StatusDstFull => DecompressStatus.DestinationFull,
-            _ => DecompressStatus.Malformed,
-        };
-
-        // Always return the bytes actually written. This is meaningful even when the
-        // status is DestinationFull (caller can grow the buffer and retry) or when
-        // the stream turned out to be malformed mid-way through a multi-block stream.
-        return state.DestinationPosition;
     }
 
     /// <summary>
-    /// Walks the block headers in <paramref name="srcBuffer"/> and sums the declared
-    /// raw-byte counts to determine the exact decompressed size. Does not decode any
-    /// payload. Intended as a fast pre-pass for the allocating overload.
+    /// Asynchronously decompresses LZFSE-compressed data, reading from
+    /// <paramref name="source"/> and writing the decompressed output to
+    /// <paramref name="destination"/>.
     /// </summary>
-    /// <exception cref="InvalidDataException">The stream is truncated, has an invalid magic, or a malformed V2 header.</exception>
-    private static int ScanDecompressedSize(ReadOnlySpan<byte> srcBuffer)
+    /// <param name="source">Stream positioned at the start of the LZFSE-compressed data.</param>
+    /// <param name="destination">Stream that the decompressed bytes are written to.</param>
+    /// <param name="cancellationToken">Token used to cancel the operation.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> or <paramref name="destination"/> is null.</exception>
+    /// <exception cref="EndOfStreamException">The source ended before the end-of-stream marker was reached.</exception>
+    /// <exception cref="InvalidDataException">The compressed data is malformed.</exception>
+    public static async ValueTask DecompressAsync(Stream source, Stream destination, CancellationToken cancellationToken = default)
     {
-        long total = 0;
-        int pos = 0;
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
 
-        while (true)
+        SourceBuffer sourceBuffer = new();
+        OutputWindow window = new();
+        LzfseDecoderState state = default;
+        state.BlockMagic = Constants.NoBlockMagic;
+        state.CompressedLzfseBlockState = LzfseCompressedBlockDecoderState.Rent();
+
+        try
         {
-            var layout = BlockHeaderParser.ReadBlockLayout(srcBuffer, pos);
-
-            if (layout.Magic == Constants.EndOfStreamBlockMagic)
+            while (true)
             {
-                if (total > int.MaxValue)
-                    throw new InvalidDataException(
-                        $"LZFSE stream declares {total} decompressed bytes, which exceeds int.MaxValue.");
-                return (int)total;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            total += layout.RawBytes;
-            long next = (long)pos + layout.BlockLength;
-            if (next > srcBuffer.Length)
-                throw new InvalidDataException("LZFSE stream is truncated: block payload is short.");
-            pos = (int)next;
+                // The decode pass itself is synchronous: it operates only on the already
+                // resident source/window buffers and never spans an await. I/O (reading
+                // more source, flushing the window) happens between passes, where awaiting
+                // is safe because no Span is held across it.
+                int status = DecodePass(ref state, sourceBuffer, window);
+
+                switch (status)
+                {
+                    case Constants.StatusOk:
+                        await window.FlushRemainingAsync(destination, cancellationToken).ConfigureAwait(false);
+                        return;
+
+                    case Constants.StatusSrcEmpty:
+                        sourceBuffer.Position = state.SourcePosition;
+                        bool gotMore = await sourceBuffer.FillAsync(source, cancellationToken).ConfigureAwait(false);
+                        state.SourcePosition = sourceBuffer.Position;
+                        if (!gotMore)
+                            throw new EndOfStreamException("LZFSE stream ended before the end-of-stream marker.");
+                        break;
+
+                    case Constants.StatusDstFull:
+                    {
+                        int freed = await window.FlushAsync(destination, cancellationToken).ConfigureAwait(false);
+                        // See the synchronous driver: a zero-progress destination-full means
+                        // the block declares more output than it can produce — malformed.
+                        if (freed == 0)
+                            throw new InvalidDataException("The compressed data is not valid LZFSE.");
+                        state.DestinationPosition -= freed;
+                        break;
+                    }
+
+                    default:
+                        throw new InvalidDataException("The compressed data is not valid LZFSE.");
+                }
+            }
+        }
+        finally
+        {
+            state.CompressedLzfseBlockState.Return();
+            window.Return();
+            sourceBuffer.Return();
         }
     }
 
     /// <summary>
-    /// Internal decoding function that processes all blocks in the stream.
+    /// Runs one synchronous decode pass over the resident buffers. Factored out so the
+    /// async driver can keep all <see cref="Span{T}"/> use inside a non-async method.
     /// </summary>
-    private static int DecodeInternal(ref LzfseDecoderState s)
+    private static int DecodePass(ref LzfseDecoderState state, SourceBuffer sourceBuffer, OutputWindow window)
+    {
+        state.SourceEnd = sourceBuffer.Available;
+        state.DestinationEnd = window.WritableEnd;
+        int status = DecodeInternal(ref state, sourceBuffer.Data, window.Buffer);
+        window.Advance(state.DestinationPosition);
+        return status;
+    }
+
+    /// <summary>
+    /// Internal decoding function that processes blocks in the stream until it either
+    /// finishes, needs more source, or fills the destination window.
+    /// </summary>
+    private static int DecodeInternal(ref LzfseDecoderState s, ReadOnlySpan<byte> source, Span<byte> destination)
     {
         while (true)
         {
@@ -159,7 +184,7 @@ public static class LzfseDecoder
                     if (s.SourcePosition + 4 > s.SourceEnd)
                         return Constants.StatusSrcEmpty; // Source truncated
 
-                    uint magic = BlockHeaderParser.ReadMagic(s.SourceBuffer[s.SourcePosition..]);
+                    uint magic = BlockHeaderParser.ReadMagic(source[s.SourcePosition..]);
 
                     switch (magic)
                     {
@@ -175,7 +200,7 @@ public static class LzfseDecoder
                                 return Constants.StatusSrcEmpty; // Source truncated
 
                             ref UncompressedBlockDecoderState bs = ref s.UncompressedBlockState;
-                            bs.RawByteCount = BlockHeaderParser.ReadUncompressedRawBytes(s.SourceBuffer[s.SourcePosition..]);
+                            bs.RawByteCount = BlockHeaderParser.ReadUncompressedRawBytes(source[s.SourcePosition..]);
                             s.SourcePosition += Constants.UncompressedBlockHeaderSize;
                             s.BlockMagic = magic;
                             break;
@@ -186,9 +211,25 @@ public static class LzfseDecoder
                             if (s.SourcePosition + Constants.LzvnCompressedBlockHeaderSize > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Source truncated
 
+                            (uint rawBytes, uint payloadBytes) = BlockHeaderParser.ReadLzvnHeader(source[s.SourcePosition..]);
+
+                            // Reject an implausibly large declared payload
+                            if (payloadBytes > Constants.MaxBlockPayloadBytes)
+                                return Constants.StatusError;
+
+                            // Require the whole payload to be resident before decoding so the
+                            // LZVN sub-decoder is never limited by source truncation mid-block,
+                            // its only stopping reason then is the destination window filling.
+                            if ((long)s.SourcePosition + Constants.LzvnCompressedBlockHeaderSize + payloadBytes > s.SourceEnd)
+                                return Constants.StatusSrcEmpty; // Need whole encoded block
+
                             ref LzvnCompressedBlockDecoderState bs = ref s.CompressedLzvnBlockState;
-                            (bs.RawByteCount, bs.PayloadByteCount) = BlockHeaderParser.ReadLzvnHeader(s.SourceBuffer[s.SourcePosition..]);
+                            bs.RawByteCount = rawBytes;
+                            bs.PayloadByteCount = payloadBytes;
                             bs.PreviousDistance = 0;
+                            bs.PendingLiteralLength = 0;
+                            bs.PendingMatchLength = 0;
+                            bs.PendingMatchDistance = 0;
                             s.SourcePosition += Constants.LzvnCompressedBlockHeaderSize;
                             s.BlockMagic = magic;
                             break;
@@ -209,7 +250,7 @@ public static class LzfseDecoder
                                 if (s.SourcePosition + Constants.V2FixedHeaderSize > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
 
-                                var decodeResult = BlockHeaderParser.DecodeV2ToV1(s.SourceBuffer[s.SourcePosition..]);
+                                var decodeResult = BlockHeaderParser.DecodeV2ToV1(source[s.SourcePosition..]);
                                 if (decodeResult.Status != 0)
                                     return Constants.StatusError; // Failed
 
@@ -221,13 +262,20 @@ public static class LzfseDecoder
                                 if (s.SourcePosition + Constants.V1HeaderSize > s.SourceEnd)
                                     return Constants.StatusSrcEmpty; // Source truncated
 
-                                header1 = BlockHeaderParser.DecodeV1(s.SourceBuffer[s.SourcePosition..]);
+                                header1 = BlockHeaderParser.DecodeV1(source[s.SourcePosition..]);
                                 headerSize = (uint)Constants.V1HeaderSize;
                             }
 
+                            // Reject implausibly large declared payloads before requiring them
+                            // resident: otherwise a malformed header drives the source buffer to
+                            // grow without bound chasing bytes that will never arrive.
+                            if (header1.NLiteralPayloadBytes > Constants.MaxBlockPayloadBytes ||
+                                header1.NLmdPayloadBytes > Constants.MaxBlockPayloadBytes)
+                                return Constants.StatusError;
+
                             // We require the header + entire encoded block to be present in source
                             // during the entire block decoding
-                            if (s.SourcePosition + headerSize + header1.NLiteralPayloadBytes + header1.NLmdPayloadBytes > s.SourceEnd)
+                            if ((long)s.SourcePosition + headerSize + header1.NLiteralPayloadBytes + header1.NLmdPayloadBytes > s.SourceEnd)
                                 return Constants.StatusSrcEmpty; // Need all encoded block
 
                             // Sanity checks
@@ -274,14 +322,14 @@ public static class LzfseDecoder
                                 bs.DDecoder);
 
                             // Decode literals
-                            if (DecodeLiterals(ref s, ref bs, ref header1) != 0)
+                            if (DecodeLiterals(ref s, ref bs, ref header1, source) != 0)
                                 return Constants.StatusError;
 
                             // Skip literal payload
                             s.SourcePosition += (int)header1.NLiteralPayloadBytes;
 
                             // Initialize the L,M,D decode stream, do not start decoding matches yet
-                            if (InitializeLmdStream(ref s, ref bs, ref header1) != 0)
+                            if (InitializeLmdStream(ref s, ref bs, ref header1, source) != 0)
                                 return Constants.StatusError;
 
                             s.BlockMagic = magic;
@@ -323,7 +371,7 @@ public static class LzfseDecoder
                         copySize = (uint)dstSpace; // Limit to destination capacity (> 0)
 
                     // Copy the data (we always have copySize > 0 here)
-                    s.SourceBuffer.Slice(s.SourcePosition, (int)copySize).CopyTo(s.DestinationBuffer[s.DestinationPosition..]);
+                    source.Slice(s.SourcePosition, (int)copySize).CopyTo(destination[s.DestinationPosition..]);
                     s.SourcePosition += (int)copySize;
                     s.DestinationPosition += (int)copySize;
                     bs.RawByteCount -= copySize;
@@ -340,7 +388,7 @@ public static class LzfseDecoder
                     if (s.SourceEnd <= s.SourcePosition || bs.NLmdPayloadBytes > (uint)(s.SourceEnd - s.SourcePosition))
                         return Constants.StatusSrcEmpty;
 
-                    int status = LzfseBlockDecoder.DecodeLmd(ref s);
+                    int status = LzfseBlockDecoder.DecodeLmd(ref s, source, destination);
                     if (status != Constants.StatusOk)
                         return status;
 
@@ -356,7 +404,8 @@ public static class LzfseDecoder
                     if (bs.PayloadByteCount > 0 && s.SourceEnd <= s.SourcePosition)
                         return Constants.StatusSrcEmpty; // Need more source data
 
-                    // Initialize LZVN decoder state
+                    // Initialize LZVN decoder state, restoring any partially expanded op
+                    // carried across a destination-window flush.
                     LzvnDecoderState dstate = new LzvnDecoderState
                     {
                         SourcePosition = s.SourcePosition,
@@ -365,6 +414,9 @@ public static class LzfseDecoder
                         DestinationStart = 0,
                         DestinationEnd = s.DestinationEnd,
                         PreviousDistance = (int)bs.PreviousDistance,
+                        LiteralLength = bs.PendingLiteralLength,
+                        MatchLength = bs.PendingMatchLength,
+                        MatchDistance = bs.PendingMatchDistance,
                         EndOfStream = false
                     };
 
@@ -377,7 +429,7 @@ public static class LzfseDecoder
                         dstate.DestinationEnd = s.DestinationPosition + (int)bs.RawByteCount;
 
                     // Run LZVN decoder
-                    LzvnDecoder.Decode(ref dstate, s.SourceBuffer, s.DestinationBuffer);
+                    LzvnDecoder.Decode(ref dstate, source, destination);
 
                     // Update our state
                     int srcUsed = dstate.SourcePosition - s.SourcePosition;
@@ -391,6 +443,9 @@ public static class LzfseDecoder
                     bs.PayloadByteCount -= (uint)srcUsed;
                     bs.RawByteCount -= (uint)dstUsed;
                     bs.PreviousDistance = (uint)dstate.PreviousDistance;
+                    bs.PendingLiteralLength = dstate.LiteralLength;
+                    bs.PendingMatchLength = dstate.MatchLength;
+                    bs.PendingMatchDistance = dstate.MatchDistance;
 
                     // LZVN detected an invalid match distance or other semantic error.
                     // This must surface as Malformed, not DestinationFull (which is the
@@ -425,14 +480,15 @@ public static class LzfseDecoder
     private static int DecodeLiterals(
         ref LzfseDecoderState s,
         ref LzfseCompressedBlockDecoderState bs,
-        ref LzfseCompressedBlockHeaderV1 header1)
+        ref LzfseCompressedBlockHeaderV1 header1,
+        ReadOnlySpan<byte> source)
     {
         FseInStream inStream = default;
         const int bufStart = 0;
         int literalPayloadEnd = s.SourcePosition + (int)header1.NLiteralPayloadBytes;
         int buf = literalPayloadEnd; // Read bits backwards from the end
 
-        var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, s.SourceBuffer);
+        var initResult = inStream.Init(header1.LiteralBits, buf, bufStart, source);
         if (initResult.Status != 0)
             return -1;
         buf = initResult.BufferPtr;
@@ -445,7 +501,7 @@ public static class LzfseDecoder
         // Decode literals 4 at a time (n_literals is multiple of 4)
         for (uint i = 0; i < header1.NLiterals; i += 4)
         {
-            var flushResult = inStream.Flush(buf, bufStart, s.SourceBuffer);
+            var flushResult = inStream.Flush(buf, bufStart, source);
             if (flushResult.Status != 0)
                 return -1;
             buf = flushResult.BufferPtr;
@@ -466,13 +522,14 @@ public static class LzfseDecoder
     private static int InitializeLmdStream(
         ref LzfseDecoderState s,
         ref LzfseCompressedBlockDecoderState bs,
-        ref LzfseCompressedBlockHeaderV1 header1)
+        ref LzfseCompressedBlockHeaderV1 header1,
+        ReadOnlySpan<byte> source)
     {
         FseInStream inStream = default;
         // Read bits backwards from the end
         int buf = s.SourcePosition + (int)header1.NLmdPayloadBytes;
 
-        var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, s.SourceBuffer);
+        var initResult = inStream.Init(header1.LmdBits, buf, s.SourcePosition, source);
         if (initResult.Status != 0)
             return -1;
         buf = initResult.BufferPtr;
